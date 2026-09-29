@@ -2,6 +2,7 @@ import { useApp } from '../state/context'
 import { BundleInspector } from '../components/BundleInspector'
 import { ForensicsRunner } from '../components/ForensicsRunner'
 import { BundleList } from '../components/BundleList'
+import { ReportBundleForm } from '../components/ReportBundleForm'
 
 export function MempoolView() {
   const { selectedBundle, snapshot, claim, wallet, mode } = useApp()
@@ -11,7 +12,10 @@ export function MempoolView() {
     (mode === 'guest' || wallet.account?.toLowerCase() === selectedBundle.victimAddress.toLowerCase())
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
-      <BundleList />
+      <div className="min-w-0 space-y-5">
+        <BundleList />
+        <ReportBundleForm />
+      </div>
       <div className="min-w-0 space-y-5">
         {selectedBundle ? (
           <>

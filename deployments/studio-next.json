@@ -3,47 +3,47 @@
   "chain_id": 61997,
   "rpc_url": "https://studio-next.genlayer.com/api",
   "explorer": "https://explorer-studio-next.genlayer.com",
-  "contract_address": "0x1459767AD733f1D14997EF89b2962707c63aE5DE",
-  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0x1459767AD733f1D14997EF89b2962707c63aE5DE",
+  "contract_address": "0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E",
+  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E",
   "deployer": "0xBEF843A77C675218228184EF13F22BF7BBC99A53",
-  "deploy_tx": "0x85ea4d9f3a09637fabcf5eebb8f381802c2ae971599bf9218bef4bcd9f1707fd",
-  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x85ea4d9f3a09637fabcf5eebb8f381802c2ae971599bf9218bef4bcd9f1707fd",
-  "deployed_at": "2026-09-29T15:50:25+00:00",
+  "deploy_tx": "0xf0f36cbeaa710a589f24672bcda0ede3bac174cfb1dabe5507a3c4b86cc40cfc",
+  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xf0f36cbeaa710a589f24672bcda0ede3bac174cfb1dabe5507a3c4b86cc40cfc",
+  "deployed_at": "2026-09-29T17:59:29+00:00",
   "source": "contracts/frontrun_shield.py",
-  "source_sha256": "9a67fbdc742e9a31e743cc74dd36ccc4827432a9fefb7d7bdfbeab23586ff00d",
+  "source_sha256": "2e60fc1a84018aa1ea39ad987ecce0152bd66e4df3c0e318c2e333a27cd534fb",
   "runner": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng",
   "fee_deposit_per_write_wei": "100000000000010352",
   "verification": {
     "method": "gen_getContractCode (base64) compared byte-for-byte with the local source",
     "onchain_source_matches": true,
-    "local_source_sha256": "9a67fbdc742e9a31e743cc74dd36ccc4827432a9fefb7d7bdfbeab23586ff00d",
-    "checked_at": "2026-09-29T15:51:01+00:00"
+    "local_source_sha256": "2e60fc1a84018aa1ea39ad987ecce0152bd66e4df3c0e318c2e333a27cd534fb",
+    "checked_at": "2026-09-29T18:03:52+00:00"
   },
   "seed": {
     "builders": {
       "Flashbots Alpha Relay": {
         "address": "0xdeabe6753ca5683ea8fe763d143053f17b5aae09",
         "bond_gen": 0.5,
-        "tx": "0xe1137455a45bbf48ba5e8f63debe22a44702e8636d465d01c67769e6df238998",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xe1137455a45bbf48ba5e8f63debe22a44702e8636d465d01c67769e6df238998"
+        "tx": "0x54824662a390890612c3b8de969cda6e3c0088e048708ccc15a0a4906f91c8b2",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x54824662a390890612c3b8de969cda6e3c0088e048708ccc15a0a4906f91c8b2"
       },
       "Titan Builder #04": {
         "address": "0x6ea2ea94bd3b86fe2710dde2f8062721b838f22b",
         "bond_gen": 0.4,
-        "tx": "0xaff8cf2634491624da28a8ce591150bac04f2c4618cffc0f9b3fdf55fbbf7fb1",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xaff8cf2634491624da28a8ce591150bac04f2c4618cffc0f9b3fdf55fbbf7fb1"
+        "tx": "0x14bda8f1e867e97a09a5ba3d04fd7779398697587de949d23c825dfbb11d569e",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x14bda8f1e867e97a09a5ba3d04fd7779398697587de949d23c825dfbb11d569e"
       },
       "BeaverBuild Relay": {
         "address": "0x830603da767a964d29e9977ba4dc063e7a978612",
         "bond_gen": 0.3,
-        "tx": "0xcad81482818f037d5d3d866c9be41195cae5697036d14245918c4573f7d82a72",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xcad81482818f037d5d3d866c9be41195cae5697036d14245918c4573f7d82a72"
+        "tx": "0x7108f7594f019596a5c602f5c4690e9b189470809291272b379a27da53eced62",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x7108f7594f019596a5c602f5c4690e9b189470809291272b379a27da53eced62"
       },
       "Eden Sequencer": {
         "address": "0x4ab924b2a30f20e45a5231c632938502b93f5f7d",
         "bond_gen": 0.25,
-        "tx": "0xd168132daaaa36f971dbee8808279c311d766c748f9288a7dbfbd117161737b2",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xd168132daaaa36f971dbee8808279c311d766c748f9288a7dbfbd117161737b2"
+        "tx": "0xc400837e4826a261b04087cab711b8d85d17e3ffb6f7120ef5830ba0a4821f9c",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xc400837e4826a261b04087cab711b8d85d17e3ffb6f7120ef5830ba0a4821f9c"
       }
     },
     "bundles": {
@@ -53,8 +53,8 @@
         "victim_tx_hash": "0x5c96122a048ebab07664828956083eec6c0deef52b24f135c5c6e4c61084b1c2",
         "frontrun_tx_hash": "0xf68cff18d48ac8b8346c54ee72f7647e992a000cc459fda0da91b22c66d3f624",
         "backrun_tx_hash": "0x1a80677209a348152377ba8de83a0f9d9a030b84d620552386dd8cccdeb8c4cc",
-        "tx": "0x07a3225738d8aa0c342e78650a0496f687e080142f12322c20dc999142184247",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x07a3225738d8aa0c342e78650a0496f687e080142f12322c20dc999142184247"
+        "tx": "0x34a533d4d236038d4c09406e5bc09545b08a002f8435a098b25a68fb6cadd32e",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x34a533d4d236038d4c09406e5bc09545b08a002f8435a098b25a68fb6cadd32e"
       },
       "benign-arbitrage": {
         "bundle_id": 2,
@@ -62,8 +62,8 @@
         "victim_tx_hash": "0xe9049854dde8b8c9bdc74a84ebf67d838d896bad59ebb99f83eb094a03cd1196",
         "frontrun_tx_hash": "0xf975d29368a6e122f0a4c3dd833e4bb46684f4ca2303323e92340168bb60a7ee",
         "backrun_tx_hash": "0x5aadecebc4e54086684fd07f7d3b85803a6a2ecef5cd6368383897c3b323fdff",
-        "tx": "0x58a2c08a31f8495a443cf403ce07e4bd187239cbd02a3825e85a05f09fc91630",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x58a2c08a31f8495a443cf403ce07e4bd187239cbd02a3825e85a05f09fc91630"
+        "tx": "0x21ec562c67ed3daf477d172b1a5a48f9318750316baa538740d8834193748f96",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x21ec562c67ed3daf477d172b1a5a48f9318750316baa538740d8834193748f96"
       },
       "pending-review": {
         "bundle_id": 3,
@@ -71,8 +71,8 @@
         "victim_tx_hash": "0x2cbbdae064d3b55fc6db999a0086682947160cd12262acd6396a1cedbeb433e6",
         "frontrun_tx_hash": "0x89ccc29c558fb2194a32defe016f789e78cde4fbb7fc16c2963055d922d03f6f",
         "backrun_tx_hash": "0xf3ae56f9ecbd70e98cf0e862013ca202822477ca7c8cf98caaa7d378580985e3",
-        "tx": "0xe67fc3553bb84120d4111243fdcadb397894ca9107e8a4066b3f5a92e4dd1b04",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xe67fc3553bb84120d4111243fdcadb397894ca9107e8a4066b3f5a92e4dd1b04"
+        "tx": "0xe7bf90023467f8cd63afb30896d5121fa9e0166fa5c0cf5ad211f9dc924d114e",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xe7bf90023467f8cd63afb30896d5121fa9e0166fa5c0cf5ad211f9dc924d114e"
       }
     },
     "evaluations": {
@@ -84,53 +84,70 @@
         "confidence": 95,
         "consensus_state": "MAJORITY_AGREE",
         "validator_votes": [
-          "agree",
-          "agree",
           "idle",
+          "agree",
+          "agree",
           "idle",
           "agree"
         ],
         "slashed_amount_wei": "200000000000000000",
+        "reporter_bounty_wei": "20000000000000000",
+        "reporter_bond_returned": true,
         "builder": "Titan Builder #04",
         "builder_status_after": "SLASHED",
-        "rationale": "The bot's frontrun (tx index 41) and backrun (tx index 43) directly bracket the victim (tx index 42) in the same block, with a frontrun priority fee of 412gwei versus the victim's 9gwei, indicating deliberate ordering. The victim hit 495bps slippage (near its 500bps limit) and lost $16,100, while the bot net profit was $18,420, matching the victim's loss plus extra. Pool price jumped from $3100.0 to $3131.4 before the victim and returned to $3100.35 after the backrun, aligning with a classic sandwich manipulation rather than a benign arbitrage.",
-        "tx": "0x546230fd33682b7b49351bdde84e2dceb295cdcef75f89cb5635a25407bfe2f0",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x546230fd33682b7b49351bdde84e2dceb295cdcef75f89cb5635a25407bfe2f0",
-        "at": "2026-09-29T15:54:28+00:00"
+        "rationale": "The bundle shows a classic sandwich pattern with a frontrun and backrun bracketing the victim in the same block, and the frontrun paid a priority fee of 412 gwei to ensure ordering. The victim's slippage of 495 bps is extremely high, indicating they were pushed near their limit, and the bot's extracted value of $18,420 closely matches the victim's loss of $16,100, confirming profit was extracted from victim impact rather than external arbitrage.",
+        "tx": "0x25cb9e8607f986aa3387b5204e4eac32337ff783974c085af54a8f360325e75e",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x25cb9e8607f986aa3387b5204e4eac32337ff783974c085af54a8f360325e75e",
+        "at": "2026-09-29T18:02:35+00:00"
       },
       "2": {
         "bundle_id": 2,
         "bundle_status": "BENIGN",
         "classification": "BENIGN_ARBITRAGE",
         "is_toxic": false,
-        "confidence": 95,
+        "confidence": 82,
         "consensus_state": "MAJORITY_AGREE",
         "validator_votes": [
+          "idle",
+          "idle",
           "agree",
-          "idle",
-          "idle",
           "agree",
           "agree"
         ],
         "slashed_amount_wei": "0",
+        "reporter_bounty_wei": "0",
+        "reporter_bond_returned": false,
         "builder": "BeaverBuild Relay",
         "builder_status_after": "ACTIVE",
-        "rationale": "The bot trades on two different venues (Uniswap V3 and Curve) with legs on separate pools, and the bundle is not in the same block as the victim (victim offset 28 blocks). Victim loss is $0 and price impact from the bot is only 0.4 bps, indicating no forced slippage, while the profit stems from a crossvenue price gap.",
-        "tx": "0xeece000888722668152bedfb310c8a6411df3bfcf1b17b049fd0aee6226e1887",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xeece000888722668152bedfb310c8a6411df3bfcf1b17b049fd0aee6226e1887",
-        "at": "2026-09-29T15:59:11+00:00"
+        "rationale": "The victim_loss_usd is recorded as exactly $0.00, meaning the victim suffered no extractable value loss, which is inconsistent with a toxic sandwich where profit directly mirrors victim harm. The victim's slippage tolerance is only 6 bps  an extremely tight limit that would have triggered a revert had a frontrun materially moved the price against them, yet the transaction succeeded. The bot's $2,310 profit is better explained by a genuine cross-venue price gap between Uniswap V3 and Curve on the WETH/USDT pair, with the frontrun priority fee of 38 gwei being moderately elevated but not anomalo",
+        "tx": "0x9f6db9cbd6978b0f3968e902da1d70d6cfee888ff6615bd3a551ee6f1856d668",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x9f6db9cbd6978b0f3968e902da1d70d6cfee888ff6615bd3a551ee6f1856d668",
+        "at": "2026-09-29T18:03:08+00:00"
       }
     },
     "reference_feed": {
       "url": "https://api.coinbase.com/v2/prices/ETH-USD/spot",
-      "tx": "0xbcbcf32b4463ca48ad0b88779fa9797922db6c5fcf9ee728d0819d3036183438",
-      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xbcbcf32b4463ca48ad0b88779fa9797922db6c5fcf9ee728d0819d3036183438"
+      "tx": "0xa0f4c6b59cd2a59c8633b5826cd902c5fb73dfd79ca266c1fa1af892e6fe050f",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xa0f4c6b59cd2a59c8633b5826cd902c5fb73dfd79ca266c1fa1af892e6fe050f"
+    },
+    "telemetry_gateway": {
+      "url": "https://httpbin.org/anything/frontrunshield/trace",
+      "tx": "0x3df5ec2700d197e2ce39ec3f19c25c077f4561b7c254b7e6b0713f0b600014c8",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x3df5ec2700d197e2ce39ec3f19c25c077f4561b7c254b7e6b0713f0b600014c8"
     },
     "restitution_claims": {
       "1": {
-        "tx": "0x7e31e4eef7a4babcad05e8175584c5a92841423ea14aecf7ebe8c87b4848ada3",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x7e31e4eef7a4babcad05e8175584c5a92841423ea14aecf7ebe8c87b4848ada3"
+        "tx": "0x819e91e1466ea6be2dfddcdb829dddc2bea88fbe34aa8a79834c0400557707fe",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x819e91e1466ea6be2dfddcdb829dddc2bea88fbe34aa8a79834c0400557707fe"
       }
     }
-  }
+  },
+  "superseded": [
+    {
+      "contract_address": "0x1459767AD733f1D14997EF89b2962707c63aE5DE",
+      "deploy_tx": "0x85ea4d9f3a09637fabcf5eebb8f381802c2ae971599bf9218bef4bcd9f1707fd",
+      "deployed_at": "2026-09-29T15:50:25+00:00",
+      "source_sha256": "9a67fbdc742e9a31e743cc74dd36ccc4827432a9fefb7d7bdfbeab23586ff00d"
+    }
+  ]
 }

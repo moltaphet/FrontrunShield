@@ -173,6 +173,20 @@ for (const width of [1280, 1440, 1920]) {
   await clickText(page, 'nav button', 'Sequencer Bonds')
   const after = await text(page)
   check('guest mode: builder now SLASHED in the registry', /Eden Sequencer[\s\S]{0,160}SLASHED/.test(after))
+  check('registry has an Unstake control per builder', (after.match(/Unstake/g) ?? []).length >= 3)
+  await clickText(page, 'button', 'Unstake')
+  await waitText(page, 'Unbonding', 5000).then(
+    () => check('guest mode: unstake shows a cooldown indicator', true),
+    () => check('guest mode: unstake shows a cooldown indicator', false),
+  )
+  await clickText(page, 'nav button', 'Mempool')
+  const mem = await text(page)
+  check('report form states the 0.05 GEN Reporter Security Deposit', mem.includes('0.05 GEN Reporter Security Deposit'))
+  const telemetryInputs = await page.evaluate(() =>
+    [...document.querySelectorAll('form[aria-label="Report a suspect bundle"] input, form[aria-label="Report a suspect bundle"] label')]
+      .filter((e) => /telemetry|url/i.test(`${e.id} ${e.placeholder ?? ''} ${e.textContent}`) && e.tagName === 'INPUT' || (e.tagName === 'LABEL' && /telemetry url/i.test(e.textContent))).length)
+  check('report form has no telemetry URL input', telemetryInputs === 0, String(telemetryInputs))
+  await page.screenshot({ path: `${SHOTS}/07-report-form.png`, fullPage: true })
   check('zero console errors in guest flow', problems.length === 0, problems.slice(0, 4).join(' | '))
   await page.close()
 }

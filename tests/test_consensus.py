@@ -3,12 +3,12 @@ confidence band, and refuses to endorse anything it cannot reproduce."""
 
 import pytest
 
-from conftest import CONTRACT, BOND, stake, submit, mock_feeds, mock_verdict
+from conftest import deploy_configured, stake, submit, mock_feeds, mock_verdict
 
 
 @pytest.fixture
 def run(direct_vm, direct_deploy, direct_alice, direct_bob):
-    c = direct_deploy(CONTRACT)
+    c = deploy_configured(direct_vm, direct_deploy)
     stake(c, direct_vm, direct_alice)
     bid = submit(c, direct_vm, direct_bob)
     mock_feeds(direct_vm)
@@ -63,3 +63,19 @@ def test_validator_does_not_endorse_when_it_cannot_reproduce(run):
 
 def test_validator_disagrees_when_leader_errored_but_it_succeeds(run):
     assert run.run_validator(leader_error=Exception("[LLM_ERROR] boom")) is False
+
+
+def test_validator_rejects_leader_claiming_no_telemetry_when_evidence_exists(run):
+    """A leader that pretends the gateway was empty (to dodge or force an
+    outcome) is not endorsed by a validator that can read the evidence."""
+    lazy = {"is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
+            "rationale": "No verifiable telemetry", "telemetry_ok": False}
+    assert run.run_validator(leader_result=lazy) is False
+
+
+def test_validators_agree_when_gateway_is_down_for_everyone(run):
+    run._web_mocks.clear()
+    run.mock_web(r".*", {"status": 503, "body": "down"})
+    lazy = {"is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
+            "rationale": "No verifiable telemetry", "telemetry_ok": False}
+    assert run.run_validator(leader_result=lazy) is True

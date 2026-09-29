@@ -6,7 +6,11 @@
 Handles the deployer key (generated into a git-ignored, mode-600 .env), tops the
 account up from Studio's sim_fundAccount faucet, deploys with the mandatory fee
 deposit attached, checks the on-chain code against the local source, and records
-everything in deployments/studio-next.json.
+everything in deployments/studio-next.json. A redeploy (--force) keeps the
+superseded instance under `superseded` for the audit trail.
+
+Bundles are submitted by scripts/interact_live.py, which attaches the mandatory
+0.05 GEN reporter bond to every submit_mempool_bundle.
 """
 
 from __future__ import annotations
@@ -98,6 +102,10 @@ def main() -> None:
     verified = verify_source(client, address)
     log(f"On-chain source matches local source: {verified}")
 
+    superseded = list(existing.get("superseded", []))
+    if existing.get("contract_address"):
+        superseded.append({k: existing.get(k) for k in (
+            "contract_address", "deploy_tx", "deployed_at", "source_sha256")})
     save_deployment({
         "network": "studio-next",
         "chain_id": CHAIN_ID,
@@ -120,6 +128,7 @@ def main() -> None:
             "checked_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         },
         "seed": {},
+        "superseded": superseded,
     })
     log(f"Recorded -> {DEPLOYMENT_PATH.relative_to(DEPLOYMENT_PATH.parent.parent)}")
     log(address_link(address))

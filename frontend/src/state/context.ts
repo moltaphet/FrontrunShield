@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { Bundle, DataMode, Snapshot, Verdict } from '../lib/types'
+import type { BundleReport } from '../data/guestData'
 
 export type Tab = 'terminal' | 'mempool' | 'bonds' | 'about'
 export type RunPhase = 'idle' | 'ingesting' | 'consensus' | 'settling' | 'done' | 'error'
@@ -48,6 +49,9 @@ export interface AppState {
   resetRun: () => void
   stake: (name: string, builderHex: string, amountGen: string) => Promise<boolean>
   claim: (bundleId: number) => Promise<void>
+  submitBundle: (report: BundleReport) => Promise<boolean>
+  requestUnstake: (builderAddress: string) => Promise<void>
+  finalizeUnstake: (builderAddress: string) => Promise<void>
   toasts: Toast[]
   dismissToast: (id: number) => void
 }

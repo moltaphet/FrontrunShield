@@ -30,7 +30,7 @@ export function MetricBanner() {
       <Kpi icon={<Coins size={20} />} tone="bg-shield-600/15 text-shield-400" label="Active Sequencer Collateral" unit="GEN"
         value={v(fmtGen(m.activeBonds))} sub={`${m.sequencerCount} bonded builders`} />
       <Kpi icon={<ScanSearch size={20} />} tone="bg-cyanx-500/15 text-cyanx-400" label="Analyzed Bundles"
-        value={v(String(m.bundlesAnalyzed))} sub={`${m.bundlesTotal - m.bundlesAnalyzed} pending · ${m.benignCount} cleared`} />
+        value={v(String(m.bundlesAnalyzed))} sub={`${m.bundlesTotal - m.bundlesAnalyzed} pending · ${m.benignCount} cleared · ${m.inconclusiveCount} inconclusive`} />
       <Kpi icon={<Landmark size={20} />} tone="bg-amberx-500/15 text-amberx-400" label="Victim Restitution Escrow" unit="GEN"
         value={v(fmtGen(m.insurancePool))} sub={`${fmtGen(m.restitutionPaid)} GEN paid to victims`} />
     </section>

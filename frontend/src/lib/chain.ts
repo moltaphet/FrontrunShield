@@ -13,6 +13,9 @@ export const CONTRACT_ADDRESS: string =
 export const GITHUB_URL: string | null = (import.meta.env.VITE_GITHUB_URL as string | undefined) ?? null
 
 export const FEE_DEPOSIT_LABEL = '0.1 GEN'
+/** Mandatory escrow attached to every bundle report (contract REPORTER_BOND). */
+export const REPORTER_BOND_WEI = 50_000_000_000_000_000n
+export const REPORTER_BOND_LABEL = '0.05 GEN'
 
 /** genlayer-js ships the consensus-contract wiring for chain 61997; only the
  *  RPC endpoint is pinned here. */

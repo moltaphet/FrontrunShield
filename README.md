@@ -11,12 +11,12 @@ victim insurance pool, from which the victim can claim restitution.
 | | |
 |---|---|
 | Network | GenLayer Studio Next · chain `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
-| Contract | [`0x1459767AD733f1D14997EF89b2962707c63aE5DE`](https://explorer-studio-next.genlayer.com/address/0x1459767AD733f1D14997EF89b2962707c63aE5DE) |
+| Contract | [`0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`](https://explorer-studio-next.genlayer.com/address/0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E) |
 | Source verified | On-chain source (`gen_getContractCode`) is byte-identical to `contracts/frontrun_shield.py` (sha256 in `deployments/studio-next.json`) |
-| Deploy tx | [`0x85ea4d9f…07fd`](https://explorer-studio-next.genlayer.com/transactions/0x85ea4d9f3a09637fabcf5eebb8f381802c2ae971599bf9218bef4bcd9f1707fd) |
-| **Live slashing tx** | [`0x546230fd…e2f0`](https://explorer-studio-next.genlayer.com/transactions/0x546230fd33682b7b49351bdde84e2dceb295cdcef75f89cb5635a25407bfe2f0) - `TOXIC_SANDWICH`, confidence 95, 3 validators `agree`, builder bond 0.4 → 0.2 GEN |
-| Live benign tx | [`0xeece0008…1887`](https://explorer-studio-next.genlayer.com/transactions/0xeece000888722668152bedfb310c8a6411df3bfcf1b17b049fd0aee6226e1887) - `BENIGN_ARBITRAGE`, builder cleared, no slash |
-| Restitution claim | [`0x7e31e4ee…ada3`](https://explorer-studio-next.genlayer.com/transactions/0x7e31e4eef7a4babcad05e8175584c5a92841423ea14aecf7ebe8c87b4848ada3) - victim of bundle #1 claimed the 0.2 GEN |
+| Deploy tx | [`0xf0f36cbe…0cfc`](https://explorer-studio-next.genlayer.com/transactions/0xf0f36cbeaa710a589f24672bcda0ede3bac174cfb1dabe5507a3c4b86cc40cfc) (v2, patched; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`) |
+| **Live slashing tx** | [`0x25cb9e86…e75e`](https://explorer-studio-next.genlayer.com/transactions/0x25cb9e8607f986aa3387b5204e4eac32337ff783974c085af54a8f360325e75e) - `TOXIC_SANDWICH`, confidence 95, builder bond 0.4 → 0.2 GEN, reporter got bond back + 0.02 GEN bounty |
+| Live benign tx | [`0x9f6db9cb…d668`](https://explorer-studio-next.genlayer.com/transactions/0x9f6db9cbd6978b0f3968e902da1d70d6cfee888ff6615bd3a551ee6f1856d668) - `BENIGN_ARBITRAGE`, builder cleared, reporter's 0.05 GEN bond forfeited to the pool |
+| Restitution claim | [`0x819e91e1…07fe`](https://explorer-studio-next.genlayer.com/transactions/0x819e91e1466ea6be2dfddcdb829dddc2bea88fbe34aa8a79834c0400557707fe) - victim of bundle #1 claimed the 0.18 GEN victim share |
 
 ## Why a smart contract can't do this (theory)
 
@@ -47,7 +47,7 @@ consensus on **judgement** via the Equivalence Principle instead of byte-identic
   │                                                                       ││
   │ evaluate_bundle_forensics(bundle_id)                                  ││
   │   ┌───────────── leader ─────────────┐   ┌──── each validator ─────┐  ││
-  │   │ 1 fetch trace telemetry_url      │   │ re-runs steps 1-3       │  ││
+  │   │ 1 fetch gateway/<3 tx hashes>  │   │ re-runs steps 1-3       │  ││
   │   │ 2 fetch Coinbase reference price │   │ agrees iff              │  ││
   │   │ 3 LLM forensic prompt -> verdict │──▶│   is_toxic  ==  leader  │  ││
   │   │ 4 deterministic clamp            │   │   |Δconfidence| <= 35   │  ││
@@ -70,24 +70,63 @@ rationale, slashed amount, timestamp), plus the insurance pool.
 | Method | Kind | Purpose |
 |---|---|---|
 | `stake_builder_bond(name, builder_hex)` | payable write | Post / top up collateral. `builder_hex` empty = caller; a relay may sponsor a bond for a builder key. Min 0.25 GEN. |
-| `submit_mempool_bundle(...)` | write | Register a bundle trace against a bonded builder (USD as integer cents). Builder → `UNDER_REVIEW`. |
+| `submit_mempool_bundle(...)` | **payable** write | Register a bundle trace against a bonded builder (USD as integer cents). Must carry exactly the 0.05 GEN reporter bond. No telemetry URL parameter. Builder → `UNDER_REVIEW`. |
 | `evaluate_bundle_forensics(bundle_id)` | write | Committee consensus, then settlement. |
 | `claim_restitution(bundle_id)` | write | Named victim pulls the slashed amount from the pool (CEI, rollback on failed transfer). |
-| `set_reference_feed(url)` | write | Governor-only independent price feed. |
+| `set_reference_feed(url)` / `set_telemetry_gateway(url)` | write | Governor-only: independent price feed, and the base URL evidence is fetched from. |
+| `request_builder_unstake()` / `finalize_builder_unstake()` | write | Builder exits its own bond: request, 3-day cooldown, release only with `pending_bundles == 0`. |
 | `get_all_sequencers` / `get_all_bundles` / `get_all_verdicts` / `get_protocol_metrics` | view | Registry, bundles, verdicts, KPIs (total slashed, active bonds, pool, analyzed). |
 
 **Guardrails.** A deterministic clamp overrides the model: zero extracted value or victim
 slippage under 50 bps can never be toxic; confidence under 60 is inconclusive (builder keeps
 the bond); contradictory or unparseable model output reverts instead of settling. Telemetry
-URLs are SSRF-guarded, untrusted text is ASCII-sanitised and wrapped in isolation tags.
+URLs (governor-set only) are SSRF-guarded, untrusted text is ASCII-sanitised and wrapped in isolation tags.
 Slash = 50% of the *remaining* bond, so it can never exceed the stake.
+
+## Economic security model
+
+The first version (`df376dd`) scored 3.5/10 on an economic audit: reporting was free, so anyone
+could grief builders at zero cost; reporters chose the evidence URL, so they could serve forged
+evidence; a junk report could permanently censor a real one; and builders could withdraw before
+a verdict. This version closes each hole.
+
+**Reporter bonding.** `submit_mempool_bundle` must carry exactly `REPORTER_BOND` = 0.05 GEN,
+held in `reporter_escrow` until the verdict.
+
+| Verdict | Reporter | Builder | Pool |
+|---|---|---|---|
+| `TOXIC_SANDWICH` | bond back + **10%** of the slash (bounty) | loses 50% of its bond | slash − bounty (victim share) |
+| `BENIGN_ARBITRAGE` | bond **forfeited** | cleared, +reputation | + forfeited bond |
+| `INCONCLUSIVE` (incl. no telemetry, low confidence, deterministic clamp) | bond **forfeited** | untouched | + forfeited bond |
+
+**Slashing restitution.** The bounty is carved out of the slash, never extra stake, so
+`total_slashed = bounties_paid + victim pool`. `claim_restitution` pays the victim only the
+victim share (slash − bounty). Accounting reconciles as
+`insurance_pool + restitution_paid + bounties_paid = total_slashed + bonds_forfeited`
+(asserted after every test step) and `check_solvency` covers bonds + pool + reporter escrow.
+
+**Deterministic telemetry.** Reporters no longer pass a URL. The evidence endpoint is
+`<gateway>/<victim_tx>/<frontrun_tx>/<backrun_tx>`, where the gateway is set by the governor
+(`set_telemetry_gateway`, SSRF-guarded) and the hashes are regex-validated. If validators cannot
+fetch telemetry the leader returns `INCONCLUSIVE` without asking the model; the contract never
+slashes on the reporter's word alone.
+
+**Replay recovery.** The replay guard maps the hash triple to its latest bundle. Only an
+`INCONCLUSIVE` bundle may be re-filed (with a fresh bond); `PENDING`, `TOXIC` and `BENIGN` may not.
+
+**Unbonding cooldown.** `request_builder_unstake()` starts a 3-day clock (the bond stays slashable
+and reporters can still file). `finalize_builder_unstake()` releases the full remaining bond only
+after the cooldown **and** with `pending_bundles == 0`; the state is zeroed before the transfer is
+queued and restored if queueing fails. Only the builder's own key can unstake (a sponsor
+cannot). An `EXITED` builder can't be reported until it re-stakes.
 
 ## Repository layout
 
 ```
 contracts/frontrun_shield.py     GenVM intelligent contract
-tests/                           57 direct-mode tests (staking, consensus branches, slashing limits,
-                                 restitution / re-entrancy, validator equivalence)
+tests/                           92 direct-mode tests (staking, consensus branches, slashing limits,
+                                 restitution / re-entrancy, validator equivalence, reporter bonding,
+                                 deterministic telemetry, replay recovery, builder unbonding)
 scripts/deploy.py                key + faucet + deploy + on-chain source verification
 scripts/interact_live.py         seed | evaluate | claim | status | all
 deployments/studio-next.json     address, tx hashes, verification, seeded state
@@ -100,7 +139,7 @@ frontend/src/data/guestData.ts   rich mock dataset for Guest Mode
 ```bash
 # Python (3.12; pins mirror the working GenLayer toolchain)
 uv venv --python 3.12 && uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt
-.venv/bin/python -m pytest tests -q                     # 57 passed
+.venv/bin/python -m pytest tests -q                     # 92 passed
 .venv/bin/genvm-lint check contracts/frontrun_shield.py
 
 # Deploy + seed (generates a git-ignored, mode-600 .env with a fresh key; funds it via sim_fundAccount)
@@ -136,18 +175,24 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 | Check | Result |
 |---|---|
-| `pytest tests` | 57 passed |
+| `pytest tests` | 92 passed |
 | `genvm-lint check` | passed |
 | `npm run lint` / `npm run build` | 0 errors (tsc strict + vite) |
-| `npm run check:headless` | 26/26: zero console errors on live load, all tabs, navbar single-line at 1280/1440/1920 px, wrong-network alert + switch, guest slashing flow |
+| `npm run check:headless` | 30/30: zero console errors on live load, all tabs, navbar single-line at 1280/1440/1920 px, wrong-network alert + switch, guest slashing flow, unstake cooldown, report form deposit notice / no telemetry input |
 | Live consensus | toxic → slashed, benign → cleared, restitution claimed (hashes above) |
 
 ## Honest limitations
 
-* **Seeded data is synthetic.** Tx hashes are keccak labels, not mainnet transactions. Telemetry
-  is served by an httpbin echo endpoint reflecting the trace encoded in the URL, so it is the
-  *reporter's* data; production should point `telemetry_url` at an independent indexer/RPC trace
-  service. The only genuinely independent feed today is the Coinbase reference price.
+* **Seeded data is synthetic.** Tx hashes are keccak labels, not mainnet transactions. The demo
+  telemetry gateway is httpbin's echo endpoint: it proves the derived URL is reachable but carries
+  no trace content, so the live verdicts lean on the reporter-supplied numbers (slippage, profit,
+  loss, tip) plus the Coinbase reference price. Production must point the governor-set gateway at an
+  independent indexer/RPC trace service.
+* **Reporter-supplied numbers remain reporter-supplied.** A lying report is costly (bond forfeited)
+  but a report crafted to earn a *benign* verdict on a real attack would block re-filing.
+* **Unbonding is untested live end to end**: the seeded builders are synthetic keys nobody holds
+  and the cooldown is 3 days; it is covered by direct-mode tests with a warped clock.
+* **Governor is a single key** (gateway and reference feed).
 * **Validators are LLMs**: verdicts are probabilistic. Guardrails bound the damage, not the error rate.
   Live votes showed 3 `agree` + 2 `idle` per round.
 * Seed victim of bundle #1 is the deployer, so the restitution path could be exercised; that claim

@@ -8,6 +8,10 @@ import type { Bundle, Metrics, Sequencer, Snapshot, Verdict } from '../lib/types
  */
 
 const GEN = 10n ** 18n
+/** Mirrors the contract's economic constants. */
+export const GUEST_REPORTER_BOND = GEN / 20n
+export const GUEST_BOUNTY_BPS = 1000
+export const GUEST_COOLDOWN = 3 * 24 * 3600
 const gen = (x: number) => BigInt(Math.round(x * 1000)) * (GEN / 1000n)
 const NOW = Math.floor(Date.now() / 1000)
 const ago = (mins: number) => NOW - mins * 60
@@ -60,6 +64,8 @@ const sequencers: Sequencer[] = SEQ_SEEDS.map((s) => ({
   pendingBundles: s.pending,
   slashCount: s.slashes,
   createdAt: ago(s.age),
+  unstakeRequestedAt: 0,
+  unstakeAvailableAt: 0,
 }))
 const seqAddr = (name: string) => sequencers.find((s) => s.name === name)!.address
 
@@ -106,6 +112,7 @@ const bundles: Bundle[] = BUNDLE_SEEDS.map((b, i) => {
     lossCents: b.loss,
     priorityGwei: b.gwei,
     telemetryUrl: trace(id, b.t),
+    reporterBond: GUEST_REPORTER_BOND,
     status: b.status,
     verdictId: 0,
     restitutionClaimed: Boolean(b.claimed),
@@ -136,6 +143,8 @@ for (const b of bundles) {
     confidence: toxic ? 94 : 91,
     rationale: toxic ? RATIONALE.toxic(b) : RATIONALE.benign,
     slashedAmount: slashed,
+    reporterBounty: (slashed * BigInt(GUEST_BOUNTY_BPS)) / 10000n,
+    reporterBondReturned: toxic,
     timestamp: b.createdAt + 12 * 60,
   }
   b.verdictId = v.id
@@ -145,8 +154,12 @@ for (const b of bundles) {
 export function computeMetrics(seqs: Sequencer[], bs: Bundle[], vs: Verdict[], paid: bigint): Metrics {
   const totalSlashed = seqs.reduce((a, s) => a + s.totalSlashed, 0n)
   const activeBonds = seqs.reduce((a, s) => a + s.stakedAmount, 0n)
-  const insurancePool = totalSlashed - paid
+  const bounties = vs.reduce((a, v) => a + v.reporterBounty, 0n)
+  const forfeited = vs.reduce((a, v) => (v.reporterBondReturned ? a : a + GUEST_REPORTER_BOND), 0n)
+  const escrow = bs.filter((b) => b.status === 'PENDING').reduce((a, b) => a + b.reporterBond, 0n)
+  const insurancePool = totalSlashed - bounties + forfeited - paid
   const toxicCount = bs.filter((b) => b.status === 'TOXIC').length
+  const inconclusiveCount = bs.filter((b) => b.status === 'INCONCLUSIVE').length
   return {
     totalSlashed,
     activeBonds,
@@ -155,10 +168,17 @@ export function computeMetrics(seqs: Sequencer[], bs: Bundle[], vs: Verdict[], p
     bundlesAnalyzed: vs.length,
     bundlesTotal: bs.length,
     toxicCount,
-    benignCount: vs.length - toxicCount,
+    benignCount: vs.length - toxicCount - inconclusiveCount,
+    inconclusiveCount,
     sequencerCount: seqs.length,
-    contractBalance: activeBonds + insurancePool,
+    contractBalance: activeBonds + insurancePool + escrow,
     minBond: gen(0.25),
+    reporterBond: GUEST_REPORTER_BOND,
+    bountyBps: GUEST_BOUNTY_BPS,
+    unstakeCooldown: GUEST_COOLDOWN,
+    reporterEscrow: escrow,
+    bondsForfeited: forfeited,
+    bountiesPaid: bounties,
     solvent: true,
   }
 }
@@ -188,7 +208,9 @@ export interface SimulatedOutcome {
 
 /** Apply a committee verdict to a guest snapshot, mirroring the contract's
  *  settlement rules: 50% of the remaining bond is slashed into the insurance
- *  pool, the builder is marked SLASHED, reputation moves. */
+ *  pool (less the reporter's 10% bounty), the builder is marked SLASHED and
+ *  reputation moves. A toxic verdict returns the reporter bond; anything else
+ *  forfeits it. */
 export function simulateEvaluate(prev: Snapshot, bundleId: number): SimulatedOutcome {
   const seqs = prev.sequencers.map((s) => ({ ...s }))
   const bs = prev.bundles.map((b) => ({ ...b }))
@@ -198,8 +220,10 @@ export function simulateEvaluate(prev: Snapshot, bundleId: number): SimulatedOut
   const truth = GUEST_TRUTH[bundleId] ?? { toxic: b.slippageBps >= 50 && b.extractedCents > 0, confidence: 86 }
 
   let slashed = 0n
+  let bounty = 0n
   if (truth.toxic) {
     slashed = (seq.stakedAmount * 5000n) / 10000n
+    bounty = (slashed * BigInt(GUEST_BOUNTY_BPS)) / 10000n
     seq.stakedAmount -= slashed
     seq.totalSlashed += slashed
     seq.slashCount += 1
@@ -223,6 +247,8 @@ export function simulateEvaluate(prev: Snapshot, bundleId: number): SimulatedOut
     confidence: truth.confidence,
     rationale: truth.toxic ? RATIONALE.toxic(b) : RATIONALE.benign,
     slashedAmount: slashed,
+    reporterBounty: bounty,
+    reporterBondReturned: truth.toxic,
     timestamp: Math.floor(Date.now() / 1000),
   }
   b.verdictId = verdict.id
@@ -243,6 +269,76 @@ export function simulateStake(prev: Snapshot, name: string, amount: bigint): Sna
     pendingBundles: 0,
     slashCount: 0,
     createdAt: Math.floor(Date.now() / 1000),
+    unstakeRequestedAt: 0,
+    unstakeAvailableAt: 0,
   })
+  return { ...prev, sequencers: seqs, metrics: computeMetrics(seqs, prev.bundles, prev.verdicts, prev.metrics.restitutionPaid) }
+}
+
+export interface BundleReport {
+  builderAddress: string
+  victimAddress: string
+  victimTx: string
+  frontrunTx: string
+  backrunTx: string
+  dexPair: string
+  slippageBps: number
+  extractedCents: number
+  lossCents: number
+  priorityGwei: number
+}
+
+/** Guest-mode mirror of `submit_mempool_bundle`: escrows the reporter bond. */
+export function simulateSubmit(prev: Snapshot, r: BundleReport): Snapshot {
+  const seqs = prev.sequencers.map((s) => ({ ...s }))
+  const seq = seqs.find((s) => s.address === r.builderAddress)!
+  seq.pendingBundles += 1
+  if (seq.status === 'ACTIVE') seq.status = 'UNDER_REVIEW'
+  const id = prev.bundles.reduce((m, b) => Math.max(m, b.id), 0) + 1
+  const bs = [...prev.bundles.map((b) => ({ ...b })), {
+    id,
+    builderAddress: seq.address,
+    builderName: seq.name,
+    reporter: addr('you'),
+    victimAddress: r.victimAddress,
+    victimTx: r.victimTx,
+    frontrunTx: r.frontrunTx,
+    backrunTx: r.backrunTx,
+    dexPair: r.dexPair,
+    slippageBps: r.slippageBps,
+    extractedCents: r.extractedCents,
+    lossCents: r.lossCents,
+    priorityGwei: r.priorityGwei,
+    telemetryUrl: `https://gateway.frontrunshield.example/trace/${r.victimTx}/${r.frontrunTx}/${r.backrunTx}`,
+    reporterBond: GUEST_REPORTER_BOND,
+    status: 'PENDING' as const,
+    verdictId: 0,
+    restitutionClaimed: false,
+    createdAt: Math.floor(Date.now() / 1000),
+  }]
+  return { ...prev, sequencers: seqs, bundles: bs, metrics: computeMetrics(seqs, bs, prev.verdicts, prev.metrics.restitutionPaid) }
+}
+
+/** Guest-mode mirror of `request_builder_unstake`. */
+export function simulateRequestUnstake(prev: Snapshot, builderAddress: string): Snapshot {
+  const seqs = prev.sequencers.map((s) => ({ ...s }))
+  const seq = seqs.find((s) => s.address === builderAddress)!
+  const now = Math.floor(Date.now() / 1000)
+  seq.unstakeRequestedAt = now
+  seq.unstakeAvailableAt = now + GUEST_COOLDOWN
+  return { ...prev, sequencers: seqs }
+}
+
+/** Guest-mode mirror of `finalize_builder_unstake`; throws the contract's revert text. */
+export function simulateFinalizeUnstake(prev: Snapshot, builderAddress: string): Snapshot {
+  const seqs = prev.sequencers.map((s) => ({ ...s }))
+  const seq = seqs.find((s) => s.address === builderAddress)!
+  if (seq.unstakeRequestedAt === 0) throw new Error('no unstake requested')
+  if (Date.now() / 1000 < seq.unstakeAvailableAt) throw new Error('unstake cooldown not elapsed')
+  if (seq.pendingBundles !== 0) throw new Error('pending bundles must be resolved first')
+  seq.stakedAmount = 0n
+  seq.unstakeRequestedAt = 0
+  seq.unstakeAvailableAt = 0
+  seq.status = 'EXITED'
   return { ...prev, sequencers: seqs, metrics: computeMetrics(seqs, prev.bundles, prev.verdicts, prev.metrics.restitutionPaid) }
 }

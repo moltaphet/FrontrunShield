@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppContext, type AppState, type RunState, type Tab, type Toast, type Wallet } from './context'
-import { CHAIN_ID, explorerTx } from '../lib/chain'
+import { CHAIN_ID, REPORTER_BOND_WEI, explorerTx } from '../lib/chain'
 import {
   connectAccount, currentChainId, existingAccount, getProvider, readSnapshot, switchToStudioNext, writeContract,
 } from '../lib/contract'
 import type { DataMode, Snapshot } from '../lib/types'
-import { guestSnapshot, simulateEvaluate, simulateStake } from '../data/guestData'
+import {
+  guestSnapshot, simulateEvaluate, simulateFinalizeUnstake, simulateRequestUnstake, simulateStake, simulateSubmit,
+  type BundleReport,
+} from '../data/guestData'
 
 const EMPTY_RUN: RunState = { bundleId: null, phase: 'idle', simulated: false, feeWei: null, txHash: null, votes: [], verdict: null, error: null }
 const EMPTY_SNAPSHOT: Snapshot = {
   sequencers: [], bundles: [], verdicts: [],
   metrics: {
     totalSlashed: 0n, activeBonds: 0n, insurancePool: 0n, restitutionPaid: 0n, bundlesAnalyzed: 0, bundlesTotal: 0,
-    toxicCount: 0, benignCount: 0, sequencerCount: 0, contractBalance: 0n, minBond: 0n, solvent: true,
+    toxicCount: 0, benignCount: 0, inconclusiveCount: 0, sequencerCount: 0, contractBalance: 0n, minBond: 0n,
+    reporterBond: REPORTER_BOND_WEI, bountyBps: 1000, unstakeCooldown: 259200, reporterEscrow: 0n, bondsForfeited: 0n,
+    bountiesPaid: 0n, solvent: true,
   },
 }
 const TABS: Tab[] = ['terminal', 'mempool', 'bonds', 'about']
@@ -209,6 +214,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) { toast('err', errText(e)) }
   }, [mode, requireLive, refresh, toast])
 
+  const submitBundle = useCallback(async (r: BundleReport): Promise<boolean> => {
+    if (mode === 'guest') {
+      guestRef.current = simulateSubmit(guestRef.current, r)
+      setSnapshot(guestRef.current)
+      toast('ok', 'Simulated report filed with a 0.05 GEN reporter deposit (guest mode - nothing was sent).')
+      return true
+    }
+    const account = requireLive()
+    if (!account) return false
+    try {
+      const bond = snapshot.metrics.reporterBond || REPORTER_BOND_WEI
+      const res = await writeContract(account, 'submit_mempool_bundle', [
+        r.builderAddress, r.victimAddress, r.victimTx, r.frontrunTx, r.backrunTx, r.dexPair,
+        BigInt(r.slippageBps), BigInt(r.extractedCents), BigInt(r.lossCents), BigInt(r.priorityGwei),
+      ], bond)
+      await refresh()
+      toast('ok', 'Bundle filed on-chain; reporter deposit escrowed until the verdict.', explorerTx(res.hash))
+      return true
+    } catch (e) { toast('err', errText(e)); return false }
+  }, [mode, snapshot.metrics.reporterBond, requireLive, refresh, toast])
+
+  const requestUnstake = useCallback(async (builderAddress: string) => {
+    if (mode === 'guest') {
+      guestRef.current = simulateRequestUnstake(guestRef.current, builderAddress)
+      setSnapshot(guestRef.current)
+      toast('info', 'Unbonding started (guest mode). The bond stays slashable during the 3-day cooldown.')
+      return
+    }
+    const account = requireLive()
+    if (!account) return
+    try {
+      const res = await writeContract(account, 'request_builder_unstake', [], 0n)
+      await refresh()
+      toast('ok', 'Unbonding started. The bond stays slashable during the cooldown.', explorerTx(res.hash))
+    } catch (e) { toast('err', errText(e)) }
+  }, [mode, requireLive, refresh, toast])
+
+  const finalizeUnstake = useCallback(async (builderAddress: string) => {
+    if (mode === 'guest') {
+      try {
+        guestRef.current = simulateFinalizeUnstake(guestRef.current, builderAddress)
+        setSnapshot(guestRef.current)
+        toast('ok', 'Bond released (guest mode).')
+      } catch (e) { toast('err', errText(e)) }
+      return
+    }
+    const account = requireLive()
+    if (!account) return
+    try {
+      const res = await writeContract(account, 'finalize_builder_unstake', [], 0n)
+      await refresh()
+      toast('ok', 'Bond release queued.', explorerTx(res.hash))
+    } catch (e) { toast('err', errText(e)) }
+  }, [mode, requireLive, refresh, toast])
+
   const selectedBundle = useMemo(() => {
     const bs = snapshot.bundles
     return bs.find((b) => b.id === selectedId) ?? bs.find((b) => b.status === 'PENDING') ?? bs[bs.length - 1] ?? null
@@ -216,7 +276,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value: AppState = {
     mode, setMode, snapshot, loading, loadError, refresh, tab, setTab, selectedBundle, selectBundle,
-    wallet, connect, switchNetwork, wrongNetwork, run, evaluate, resetRun, stake, claim, toasts, dismissToast,
+    wallet, connect, switchNetwork, wrongNetwork, run, evaluate, resetRun, stake, claim, submitBundle, requestUnstake, finalizeUnstake, toasts, dismissToast,
   }
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

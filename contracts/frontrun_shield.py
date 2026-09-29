@@ -15,10 +15,24 @@
 # routes it into a victim-restitution insurance pool from which the victim can
 # claim their share.
 #
+# Economic security model:
+#   * Reporter bond. Every bundle report escrows REPORTER_BOND. A TOXIC verdict
+#     returns it plus a BOUNTY_BPS share of the slash; a BENIGN or INCONCLUSIVE
+#     verdict forfeits it into the insurance pool, so a false accusation is
+#     never free.
+#   * Deterministic telemetry. Reporters cannot name an evidence URL. The
+#     endpoint is derived from a governor-verified gateway base URL plus the
+#     three tx hashes, so a reporter cannot serve forged evidence.
+#   * Unbonding. Builders exit via request -> cooldown -> finalize, and only
+#     with zero pending bundles, so a builder cannot dodge a slash by running.
+#   * Replay. An INCONCLUSIVE bundle (no verifiable evidence) may be re-reported;
+#     a TOXIC / BENIGN / PENDING one may not.
+#
 # Fund safety: every value move is a real native transfer. Accounting is
-# split into three disjoint buckets -- builder bonds (`total_bonded`), the
-# insurance pool (`insurance_pool`) and already-paid restitution -- and the
-# `check_solvency` view proves contract balance covers the first two.
+# split into disjoint buckets -- builder bonds (`total_bonded`), reporter
+# escrow (`reporter_escrow`), the insurance pool (`insurance_pool`) and
+# already-paid restitution / bounties -- and `check_solvency` proves contract
+# balance covers the first three.
 
 import json
 import re
@@ -43,10 +57,12 @@ ERR_LLM = "[LLM_ERROR]"       # model misbehaviour, force validator rotation
 ST_ACTIVE = "ACTIVE"
 ST_SLASHED = "SLASHED"
 ST_REVIEW = "UNDER_REVIEW"
+ST_EXITED = "EXITED"  # fully unbonded; may re-stake
 
 BUNDLE_PENDING = "PENDING"
 BUNDLE_TOXIC = "TOXIC"
 BUNDLE_BENIGN = "BENIGN"
+BUNDLE_INCONCLUSIVE = "INCONCLUSIVE"  # no verdict either way; may be re-reported
 
 CONSENSUS_AGREE = "MAJORITY_AGREE"
 
@@ -55,6 +71,9 @@ GEN = 10**18
 MIN_BOND = GEN // 4          # 0.25 GEN minimum builder collateral
 SLASH_BPS = 5000             # 50% of the remaining bond per toxic verdict
 BPS = 10000
+REPORTER_BOND = GEN // 20    # 0.05 GEN escrowed with every bundle report
+BOUNTY_BPS = 1000            # 10% of a slash goes to the winning reporter
+UNSTAKE_COOLDOWN = 3 * 24 * 3600  # seconds between unstake request and release
 MIN_TOXIC_SLIPPAGE_BPS = 50  # below this the victim was not meaningfully harmed
 MIN_TOXIC_CONFIDENCE = 60    # benefit of the doubt goes to the builder
 CONFIDENCE_TOLERANCE = 35    # validator agreement band on confidence
@@ -137,6 +156,14 @@ def _fetch_feed(url: str) -> dict:
     if isinstance(body, (bytes, bytearray)):
         body = bytes(body).decode("utf-8", errors="replace")
     return {"reachable": True, "text": _sanitize(str(body), MAX_TELEMETRY_CHARS)}
+
+
+def _telemetry_url(base: str, victim_tx: str, frontrun_tx: str, backrun_tx: str) -> str:
+    """Evidence endpoint derived only from the governor-verified gateway and the
+    (regex-validated) bundle tx hashes. No reporter-controlled string reaches it."""
+    if base == "":
+        return ""
+    return f"{base.rstrip('/')}/{victim_tx}/{frontrun_tx}/{backrun_tx}"
 
 
 def _cents_to_usd(cents: int) -> str:
@@ -274,6 +301,7 @@ class Sequencer:
     slash_count: u256
     staked_by: str
     created_at: u256
+    unstake_requested_at: u256  # 0 == no unbonding in progress
 
 
 @allow_storage
@@ -290,7 +318,7 @@ class Bundle:
     bot_extracted_value_usd_cents: u256
     victim_loss_usd_cents: u256
     frontrun_priority_gwei: u256
-    telemetry_url: str
+    reporter_bond: u256
     status: str
     verdict_id: u256  # 0 == not evaluated
     restitution_claimed: bool
@@ -308,6 +336,8 @@ class Verdict:
     confidence: u256
     forensic_rationale: str
     slashed_amount: u256
+    reporter_bounty: u256
+    reporter_bond_returned: bool
     timestamp: u256
 
 
@@ -316,16 +346,20 @@ class FrontrunShield(gl.contract.Contract):
     sequencer_order: DynArray[str]
     bundles: TreeMap[u256, Bundle]
     verdicts: TreeMap[u256, Verdict]
-    seen_bundles: TreeMap[str, bool]  # replay guard over (victim, frontrun, backrun)
+    seen_bundles: TreeMap[str, u256]  # replay guard: (victim, frontrun, backrun) -> latest bundle id
     next_bundle_id: u256
     next_verdict_id: u256
     total_bonded: u256       # sum of live builder bonds
     total_slashed: u256      # lifetime confiscated
     insurance_pool: u256     # slashed GEN still reserved for victims
     restitution_paid: u256
+    reporter_escrow: u256    # reporter bonds held for PENDING bundles
+    bonds_forfeited: u256    # lifetime reporter bonds moved into the pool
+    bounties_paid: u256      # lifetime bounties paid to winning reporters
     bundles_analyzed: u256
     governor: Address
     reference_feed_url: str  # independent external price feed (governor-set)
+    telemetry_gateway: str   # governor-verified base URL for bundle telemetry
 
     def __init__(self):
         self.next_bundle_id = 1
@@ -334,17 +368,25 @@ class FrontrunShield(gl.contract.Contract):
         self.total_slashed = 0
         self.insurance_pool = 0
         self.restitution_paid = 0
+        self.reporter_escrow = 0
+        self.bonds_forfeited = 0
+        self.bounties_paid = 0
         self.bundles_analyzed = 0
         self.governor = gl.message.sender_address
         self.reference_feed_url = ""
+        self.telemetry_gateway = ""
 
     # ------------------------------------------------------------------ views
     @gl.public.view
     def get_protocol_metrics(self) -> dict:
         toxic = 0
+        inconclusive = 0
         for i in range(1, int(self.next_bundle_id)):
-            if self.bundles[u256(i)].status == BUNDLE_TOXIC:
+            st = self.bundles[u256(i)].status
+            if st == BUNDLE_TOXIC:
                 toxic += 1
+            elif st == BUNDLE_INCONCLUSIVE:
+                inconclusive += 1
         return {
             "total_slashed": str(self.total_slashed),
             "active_bonds": str(self.total_bonded),
@@ -353,7 +395,14 @@ class FrontrunShield(gl.contract.Contract):
             "bundles_analyzed": int(self.bundles_analyzed),
             "bundles_total": int(self.next_bundle_id) - 1,
             "toxic_count": toxic,
-            "benign_count": int(self.bundles_analyzed) - toxic,
+            "benign_count": int(self.bundles_analyzed) - toxic - inconclusive,
+            "inconclusive_count": inconclusive,
+            "reporter_escrow": str(self.reporter_escrow),
+            "bonds_forfeited": str(self.bonds_forfeited),
+            "bounties_paid": str(self.bounties_paid),
+            "reporter_bond": str(REPORTER_BOND),
+            "bounty_bps": BOUNTY_BPS,
+            "unstake_cooldown": UNSTAKE_COOLDOWN,
             "sequencer_count": len(self.sequencer_order),
             "contract_balance": str(self.balance),
             "min_bond": str(MIN_BOND),
@@ -391,6 +440,10 @@ class FrontrunShield(gl.contract.Contract):
         return self.reference_feed_url
 
     @gl.public.view
+    def get_telemetry_gateway(self) -> str:
+        return self.telemetry_gateway
+
+    @gl.public.view
     def whoami(self) -> str:
         return gl.message.sender_address.as_hex.lower()
 
@@ -419,9 +472,9 @@ class FrontrunShield(gl.contract.Contract):
         if key in self.sequencers:
             seq = self.sequencers[key]
             seq.staked_amount += amount
-            # A slashed builder that re-collateralizes above the floor is
-            # reinstated; the record of past slashes is kept.
-            if seq.status == ST_SLASHED and seq.staked_amount >= MIN_BOND:
+            # A slashed or exited builder that re-collateralizes above the
+            # floor is reinstated; the record of past slashes is kept.
+            if seq.status in (ST_SLASHED, ST_EXITED) and seq.staked_amount >= MIN_BOND:
                 seq.status = ST_REVIEW if seq.pending_bundles > 0 else ST_ACTIVE
             self.sequencers[key] = seq
         else:
@@ -440,13 +493,14 @@ class FrontrunShield(gl.contract.Contract):
                 slash_count=0,
                 staked_by=sender,
                 created_at=self._now(),
+                unstake_requested_at=0,
             )
             self.sequencer_order.append(key)
         self.total_bonded += amount
         return key
 
     # ---------------------------------------------------------------- bundles
-    @gl.public.write
+    @gl.public.write.payable
     def submit_mempool_bundle(
         self,
         builder_hex: str,
@@ -459,12 +513,22 @@ class FrontrunShield(gl.contract.Contract):
         bot_extracted_value_usd_cents: u256,
         victim_loss_usd_cents: u256,
         frontrun_priority_gwei: u256,
-        telemetry_url: str,
     ) -> u256:
-        """Register a suspect bundle trace against a bonded builder. Amounts are
-        USD cents (integers) so no float ever touches consensus."""
+        """Register a suspect bundle trace against a bonded builder. The call
+        must carry exactly REPORTER_BOND, escrowed until the verdict: returned
+        (plus a bounty) if the bundle is adjudicated TOXIC, forfeited to the
+        insurance pool otherwise. Amounts are USD cents (integers) so no float
+        ever touches consensus. Evidence is fetched from the governor-set
+        telemetry gateway; the reporter cannot supply a URL."""
+        if gl.message.value != REPORTER_BOND:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} reporter bond of {REPORTER_BOND} required")
+        if self.telemetry_gateway == "":
+            raise gl.vm.UserError(f"{ERR_EXPECTED} telemetry gateway not configured")
         bkey = builder_hex.strip().lower()
         if bkey not in self.sequencers:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} builder has no bond")
+        seq = self.sequencers[bkey]
+        if seq.status == ST_EXITED or seq.staked_amount == 0:
             raise gl.vm.UserError(f"{ERR_EXPECTED} builder has no bond")
         vhex = victim_hex.strip().lower()
         if vhex != "" and not _ADDR_RE.match(vhex):
@@ -481,17 +545,20 @@ class FrontrunShield(gl.contract.Contract):
         pair = _sanitize(dex_pair, 64)
         if pair == "":
             raise gl.vm.UserError(f"{ERR_EXPECTED} dex pair required")
-        url = telemetry_url.strip()
-        if url != "" and not _is_safe_url(url):
-            raise gl.vm.UserError(f"{ERR_EXPECTED} unsafe telemetry url")
 
+        # Replay guard. A bundle with a live or final verdict cannot be filed
+        # again, but an INCONCLUSIVE one (evidence missing / unverifiable) can,
+        # so a junk report cannot permanently censor a real attack.
         replay_key = "|".join(hashes)
         if replay_key in self.seen_bundles:
-            raise gl.vm.UserError(f"{ERR_EXPECTED} bundle already submitted")
-        self.seen_bundles[replay_key] = True
+            prior = self.bundles[self.seen_bundles[replay_key]]
+            if prior.status != BUNDLE_INCONCLUSIVE:
+                raise gl.vm.UserError(f"{ERR_EXPECTED} bundle already submitted")
 
         bid = self.next_bundle_id
         self.next_bundle_id = bid + 1
+        self.seen_bundles[replay_key] = bid
+        self.reporter_escrow += REPORTER_BOND
         self.bundles[bid] = Bundle(
             builder_hex=bkey,
             reporter_hex=gl.message.sender_address.as_hex.lower(),
@@ -504,13 +571,12 @@ class FrontrunShield(gl.contract.Contract):
             bot_extracted_value_usd_cents=bot_extracted_value_usd_cents,
             victim_loss_usd_cents=victim_loss_usd_cents,
             frontrun_priority_gwei=frontrun_priority_gwei,
-            telemetry_url=url,
+            reporter_bond=REPORTER_BOND,
             status=BUNDLE_PENDING,
             verdict_id=0,
             restitution_claimed=False,
             created_at=self._now(),
         )
-        seq = self.sequencers[bkey]
         seq.pending_bundles += 1
         if seq.status == ST_ACTIVE:
             seq.status = ST_REVIEW
@@ -539,13 +605,17 @@ class FrontrunShield(gl.contract.Contract):
                 "priority_gwei": int(b.frontrun_priority_gwei),
                 "extracted_cents": int(b.bot_extracted_value_usd_cents),
             },
-            b.telemetry_url,
+            _telemetry_url(self.telemetry_gateway, b.victim_tx_hash, b.frontrun_tx_hash,
+                           b.backrun_tx_hash),
             self.reference_feed_url,
         )
 
         # ---- Effects (all storage writes happen after consensus) -------------
         seq = self.sequencers[b.builder_hex]
         slashed = 0
+        bounty = 0
+        bond = int(b.reporter_bond)
+        self.reporter_escrow -= bond
         if result["is_toxic"]:
             slashed = int(seq.staked_amount) * SLASH_BPS // BPS
             if slashed > int(seq.staked_amount):
@@ -556,14 +626,22 @@ class FrontrunShield(gl.contract.Contract):
             seq.status = ST_SLASHED
             rep = int(seq.reputation_score)
             seq.reputation_score = rep - REP_SLASH_PENALTY if rep > REP_SLASH_PENALTY else 0
+            bounty = slashed * BOUNTY_BPS // BPS
             self.total_bonded -= slashed
             self.total_slashed += slashed
-            self.insurance_pool += slashed
+            self.insurance_pool += slashed - bounty  # victims get the rest
+            self.bounties_paid += bounty
             b.status = BUNDLE_TOXIC
         else:
-            b.status = BUNDLE_BENIGN
-            rep = int(seq.reputation_score) + REP_CLEAR_BONUS
-            seq.reputation_score = rep if rep < REP_MAX else REP_MAX
+            # The accusation failed: the reporter's bond funds the pool.
+            self.insurance_pool += bond
+            self.bonds_forfeited += bond
+            if result["classification"] == "INCONCLUSIVE":
+                b.status = BUNDLE_INCONCLUSIVE  # no reputation change either way
+            else:
+                b.status = BUNDLE_BENIGN
+                rep = int(seq.reputation_score) + REP_CLEAR_BONUS
+                seq.reputation_score = rep if rep < REP_MAX else REP_MAX
         seq.pending_bundles -= 1
         if seq.status == ST_REVIEW and seq.pending_bundles == 0:
             seq.status = ST_ACTIVE
@@ -580,11 +658,21 @@ class FrontrunShield(gl.contract.Contract):
             confidence=result["confidence"],
             forensic_rationale=result["rationale"],
             slashed_amount=slashed,
+            reporter_bounty=bounty,
+            reporter_bond_returned=result["is_toxic"],
             timestamp=self._now(),
         )
         b.verdict_id = vid
         self.bundles[bundle_id] = b
         self.bundles_analyzed += 1
+
+        # ---- Interaction: a winning reporter gets bond + bounty back. A failed
+        # enqueue raises, which reverts every effect above (bundle stays PENDING).
+        if result["is_toxic"]:
+            try:
+                gl.chain.Account(Address(b.reporter_hex)).emit_transfer(bond + bounty, on="finalized")
+            except Exception:
+                raise gl.vm.UserError(f"{ERR_EXPECTED} reporter payout could not be queued")
         return result["classification"]
 
     def _adjudicate(self, ctx: dict, telemetry_url: str, reference_url: str) -> dict:
@@ -597,6 +685,14 @@ class FrontrunShield(gl.contract.Contract):
 
         def leader_fn() -> dict:
             primary = _fetch_feed(telemetry_url)
+            if not primary["reachable"]:
+                # No independent evidence: never slash on the reporter's word.
+                return {
+                    "is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
+                    "rationale": "No verifiable telemetry from the gateway for these tx hashes; "
+                                 "the report may be re-filed once evidence is available.",
+                    "telemetry_ok": False,
+                }
             reference = _fetch_feed(reference_url)
             prompt = _build_prompt(ctx, primary, reference)
             try:
@@ -605,7 +701,9 @@ class FrontrunShield(gl.contract.Contract):
                 raise
             except Exception:
                 raise gl.vm.UserError(f"{ERR_LLM} model call failed")
-            return _parse_verdict(raw, slippage, extracted)
+            verdict = _parse_verdict(raw, slippage, extracted)
+            verdict["telemetry_ok"] = True
+            return verdict
 
         def validator_fn(leaders_res) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
@@ -618,6 +716,8 @@ class FrontrunShield(gl.contract.Contract):
             except gl.vm.UserError:
                 return False  # cannot reproduce a verdict -> do not endorse one
             if bool(theirs.get("is_toxic")) != mine["is_toxic"]:
+                return False
+            if bool(theirs.get("telemetry_ok")) != mine["telemetry_ok"]:
                 return False
             try:
                 if abs(int(theirs.get("confidence")) - mine["confidence"]) > CONFIDENCE_TOLERANCE:
@@ -652,7 +752,8 @@ class FrontrunShield(gl.contract.Contract):
             raise gl.vm.UserError(f"{ERR_EXPECTED} only the named victim may claim")
         if b.restitution_claimed:
             raise gl.vm.UserError(f"{ERR_EXPECTED} restitution already claimed")
-        amount = int(self.verdicts[b.verdict_id].slashed_amount)
+        verdict = self.verdicts[b.verdict_id]
+        amount = int(verdict.slashed_amount) - int(verdict.reporter_bounty)
         if amount > int(self.insurance_pool):
             amount = int(self.insurance_pool)
         if amount == 0:
@@ -682,12 +783,80 @@ class FrontrunShield(gl.contract.Contract):
             raise gl.vm.UserError(f"{ERR_EXPECTED} unsafe reference feed url")
         self.reference_feed_url = clean
 
+    @gl.public.write
+    def set_telemetry_gateway(self, url: str) -> None:
+        """Governor-verified base URL of the trace gateway. Bundle evidence is
+        fetched from `<base>/<victim_tx>/<frontrun_tx>/<backrun_tx>`."""
+        if gl.message.sender_address != self.governor:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} governor only")
+        clean = url.strip()
+        if clean == "" or not _is_safe_url(clean) or "?" in clean or "#" in clean:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} unsafe telemetry gateway url")
+        self.telemetry_gateway = clean
+
+    # -------------------------------------------------------------- unbonding
+    @gl.public.write
+    def request_builder_unstake(self) -> u256:
+        """Start the unbonding clock for the caller's own builder bond. The bond
+        stays slashable during the cooldown. Returns the earliest release time."""
+        key = gl.message.sender_address.as_hex.lower()
+        if key not in self.sequencers:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} caller is not a bonded builder")
+        seq = self.sequencers[key]
+        if seq.staked_amount == 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} nothing staked")
+        if seq.unstake_requested_at != 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} unstake already requested")
+        now = self._now()
+        seq.unstake_requested_at = now
+        self.sequencers[key] = seq
+        return now + UNSTAKE_COOLDOWN
+
+    @gl.public.write
+    def finalize_builder_unstake(self) -> str:
+        """Release the caller's full bond once the cooldown has elapsed and no
+        bundle against them is pending. CEI: state is zeroed before the transfer
+        is queued and restored if queueing fails."""
+        key = gl.message.sender_address.as_hex.lower()
+        if key not in self.sequencers:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} caller is not a bonded builder")
+        seq = self.sequencers[key]
+        if seq.unstake_requested_at == 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} no unstake requested")
+        if self._now() < int(seq.unstake_requested_at) + UNSTAKE_COOLDOWN:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} unstake cooldown not elapsed")
+        if seq.pending_bundles != 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} pending bundles must be resolved first")
+        amount = int(seq.staked_amount)
+        if amount == 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} nothing staked")
+
+        prev_status = seq.status
+        requested_at = seq.unstake_requested_at
+        seq.staked_amount = 0
+        seq.unstake_requested_at = 0
+        seq.status = ST_EXITED
+        self.sequencers[key] = seq
+        self.total_bonded -= amount
+        try:
+            gl.chain.Account(gl.message.sender_address).emit_transfer(amount, on="finalized")
+        except Exception:
+            seq.staked_amount = amount
+            seq.unstake_requested_at = requested_at
+            seq.status = prev_status
+            self.sequencers[key] = seq
+            self.total_bonded += amount
+            raise gl.vm.UserError(f"{ERR_EXPECTED} transfer could not be queued")
+        return str(amount)
+
     # --------------------------------------------------------------- internals
     def _now(self) -> int:
         return int(datetime.now(timezone.utc).timestamp())
 
     def _solvent(self) -> bool:
-        return int(self.balance) >= int(self.total_bonded) + int(self.insurance_pool)
+        return int(self.balance) >= (
+            int(self.total_bonded) + int(self.insurance_pool) + int(self.reporter_escrow)
+        )
 
     def _seq_view(self, key: str) -> dict:
         s = self.sequencers[key]
@@ -702,6 +871,10 @@ class FrontrunShield(gl.contract.Contract):
             "slash_count": int(s.slash_count),
             "staked_by": s.staked_by,
             "created_at": int(s.created_at),
+            "unstake_requested_at": int(s.unstake_requested_at),
+            "unstake_available_at": (
+                int(s.unstake_requested_at) + UNSTAKE_COOLDOWN if s.unstake_requested_at != 0 else 0
+            ),
         }
 
     def _bundle_view(self, bid: u256) -> dict:
@@ -720,7 +893,9 @@ class FrontrunShield(gl.contract.Contract):
             "bot_extracted_value_usd_cents": int(b.bot_extracted_value_usd_cents),
             "victim_loss_usd_cents": int(b.victim_loss_usd_cents),
             "frontrun_priority_gwei": int(b.frontrun_priority_gwei),
-            "telemetry_url": b.telemetry_url,
+            "telemetry_url": _telemetry_url(
+                self.telemetry_gateway, b.victim_tx_hash, b.frontrun_tx_hash, b.backrun_tx_hash),
+            "reporter_bond": str(b.reporter_bond),
             "status": b.status,
             "verdict_id": int(b.verdict_id),
             "restitution_claimed": b.restitution_claimed,
@@ -739,5 +914,7 @@ class FrontrunShield(gl.contract.Contract):
             "confidence": int(v.confidence),
             "forensic_rationale": v.forensic_rationale,
             "slashed_amount": str(v.slashed_amount),
+            "reporter_bounty": str(v.reporter_bounty),
+            "reporter_bond_returned": v.reporter_bond_returned,
             "timestamp": int(v.timestamp),
         }

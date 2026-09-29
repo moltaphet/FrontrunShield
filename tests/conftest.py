@@ -11,6 +11,9 @@ CONTRACT = "contracts/frontrun_shield.py"
 GEN = 10**18
 MIN_BOND = GEN // 4
 BOND = GEN  # 1 GEN
+REPORTER_BOND = GEN // 20  # 0.05 GEN, mandatory with every bundle report
+BOUNTY_BPS = 1000
+COOLDOWN = 3 * 24 * 3600
 
 BUILDER_A = "0x" + "a1" * 20
 BUILDER_B = "0x" + "b2" * 20
@@ -20,7 +23,7 @@ TX_V = "0x" + "01" * 32
 TX_F = "0x" + "02" * 32
 TX_B = "0x" + "03" * 32
 
-TELEMETRY = "https://telemetry.frontrunshield.example/bundle/1"
+GATEWAY = "https://telemetry.frontrunshield.example/trace"
 REFERENCE = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
 
 
@@ -37,6 +40,27 @@ def fund(vm, who, amount=1_000 * GEN):
     vm.deal(who, amount)
 
 
+def deploy_configured(vm, deploy):
+    """Deploy and point the telemetry gateway; the deploy-time sender is the
+    governor and is remembered as `vm.deployer`."""
+    c = deploy(CONTRACT)
+    vm.deployer = vm.sender
+    c.set_telemetry_gateway(GATEWAY)
+    return c
+
+
+def record_transfers(vm):
+    """Capture every native transfer the contract queues (returns the list)."""
+    seen = []
+
+    def hook(_vm, request):
+        seen.append(request)
+        return None
+
+    vm._gl_call_hook = hook
+    return seen
+
+
 def stake(c, vm, who, name="Flashbots Alpha Relay", builder=BUILDER_A, value=BOND):
     fund(vm, who)
     vm.sender = who
@@ -48,12 +72,16 @@ def stake(c, vm, who, name="Flashbots Alpha Relay", builder=BUILDER_A, value=BON
 
 def submit(c, vm, who, builder=BUILDER_A, victim=VICTIM, txs=(TX_V, TX_F, TX_B),
            pair="WETH/USDC (Uniswap V3 0.05%)", slippage=480, extracted=1_84200,
-           loss=1_61000, gwei=412, url=TELEMETRY):
+           loss=1_61000, gwei=412, value=REPORTER_BOND):
+    fund(vm, who)
     vm.sender = who
-    vm.value = 0
-    return c.submit_mempool_bundle(
-        builder, victim, txs[0], txs[1], txs[2], pair, slippage, extracted, loss, gwei, url
-    )
+    vm.value = value
+    try:
+        return c.submit_mempool_bundle(
+            builder, victim, txs[0], txs[1], txs[2], pair, slippage, extracted, loss, gwei
+        )
+    finally:
+        vm.value = 0
 
 
 def mock_feeds(vm, trace=None, ref=None):

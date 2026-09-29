@@ -91,6 +91,8 @@ export const toSequencer = (r: Row): Sequencer => ({
   pendingBundles: n(r.pending_bundles),
   slashCount: n(r.slash_count),
   createdAt: n(r.created_at),
+  unstakeRequestedAt: n(r.unstake_requested_at),
+  unstakeAvailableAt: n(r.unstake_available_at),
 })
 
 export const toBundle = (r: Row): Bundle => ({
@@ -108,6 +110,7 @@ export const toBundle = (r: Row): Bundle => ({
   lossCents: n(r.victim_loss_usd_cents),
   priorityGwei: n(r.frontrun_priority_gwei),
   telemetryUrl: s(r.telemetry_url),
+  reporterBond: big(r.reporter_bond),
   status: s(r.status) as BundleStatus,
   verdictId: n(r.verdict_id),
   restitutionClaimed: Boolean(r.restitution_claimed),
@@ -124,6 +127,8 @@ export const toVerdict = (r: Row): Verdict => ({
   confidence: n(r.confidence),
   rationale: s(r.forensic_rationale),
   slashedAmount: big(r.slashed_amount),
+  reporterBounty: big(r.reporter_bounty),
+  reporterBondReturned: Boolean(r.reporter_bond_returned),
   timestamp: n(r.timestamp),
 })
 
@@ -136,9 +141,16 @@ export const toMetrics = (r: Row): Metrics => ({
   bundlesTotal: n(r.bundles_total),
   toxicCount: n(r.toxic_count),
   benignCount: n(r.benign_count),
+  inconclusiveCount: n(r.inconclusive_count),
   sequencerCount: n(r.sequencer_count),
   contractBalance: big(r.contract_balance),
   minBond: big(r.min_bond),
+  reporterBond: big(r.reporter_bond),
+  bountyBps: n(r.bounty_bps),
+  unstakeCooldown: n(r.unstake_cooldown),
+  reporterEscrow: big(r.reporter_escrow),
+  bondsForfeited: big(r.bonds_forfeited),
+  bountiesPaid: big(r.bounties_paid),
   solvent: Boolean(r.solvent),
 })
 

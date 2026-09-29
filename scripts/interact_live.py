@@ -1,6 +1,6 @@
 """Seed and drive the live FrontrunShield deployment on Studio Next.
 
-    .venv/bin/python scripts/interact_live.py seed        # builders, bonds, 3 bundles, reference feed
+    .venv/bin/python scripts/interact_live.py seed        # gateway, feed, builders, bonds, 3 bundles (0.05 GEN reporter bond each)
     .venv/bin/python scripts/interact_live.py evaluate 1  # run consensus forensics on bundle 1
     .venv/bin/python scripts/interact_live.py claim 1     # victim claims restitution (deployer is the victim of bundle 1)
     .venv/bin/python scripts/interact_live.py status      # dump metrics, builders, bundles, verdicts
@@ -9,10 +9,16 @@
 Every write carries the ~0.1 GEN Studio Next fee deposit (see common.send_write).
 `seed` is idempotent: it reads on-chain state first and only sends what is missing.
 
+Every bundle report escrows the mandatory 0.05 GEN reporter bond (returned plus a
+10% bounty on a toxic verdict, forfeited otherwise). Reporters cannot name a
+telemetry URL: the contract derives it as `<gateway>/<victim>/<frontrun>/<backrun>`
+from the governor-set gateway, which `seed` configures.
+
 The bundle transaction hashes are synthetic (keccak of a label) - they are demo
-traces, not real mainnet transactions. Telemetry is served by httpbin's echo
-endpoint, which reflects the trace fields encoded in the URL; a production
-deployment points `telemetry_url` at an indexer or RPC-backed trace service.
+traces, not real mainnet transactions. The demo gateway is httpbin's echo
+endpoint, so it proves the endpoint is reachable and derived from the hashes but
+carries no trace content; a production deployment points the gateway at an
+indexer or RPC-backed trace service.
 """
 
 from __future__ import annotations
@@ -22,7 +28,6 @@ import datetime as dt
 import json
 import sys
 from pathlib import Path
-from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
@@ -32,6 +37,8 @@ from common import (  # noqa: E402
 )
 
 REFERENCE_FEED = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
+TELEMETRY_GATEWAY = "https://httpbin.org/anything/frontrunshield/trace"
+REPORTER_BOND = GEN // 20  # 0.05 GEN, must accompany every submit_mempool_bundle
 
 BUILDERS = [
     # name, bond (GEN)
@@ -40,10 +47,6 @@ BUILDERS = [
     ("BeaverBuild Relay", 0.30),
     ("Eden Sequencer", 0.25),
 ]
-
-
-def trace_url(bundle_no: int, fields: dict) -> str:
-    return f"https://httpbin.org/anything/frontrunshield/bundle/{bundle_no}?" + urlencode(fields)
 
 
 def bundles_spec(victim_hex: str) -> list[dict]:
@@ -57,18 +60,6 @@ def bundles_spec(victim_hex: str) -> list[dict]:
             "extracted_cents": 1_842_000,
             "loss_cents": 1_610_000,
             "priority_gwei": 412,
-            "trace": {
-                "block": 21450112, "same_block": "true",
-                "tx_index_frontrun": 41, "tx_index_victim": 42, "tx_index_backrun": 43,
-                "bot_leg1": "buy WETH same pool same direction as victim",
-                "bot_leg2": "sell WETH same pool immediately after victim",
-                "victim_slippage_limit_bps": 500, "victim_slippage_hit_bps": 495,
-                "pool_price_before": 3100.00, "pool_price_after_frontrun": 3131.40,
-                "victim_exec_price": 3131.02, "pool_price_after_backrun": 3100.35,
-                "external_ref_price": 3100.10,
-                "frontrun_priority_gwei": 412, "victim_priority_gwei": 9,
-                "bot_net_profit_usd": 18420.00, "victim_loss_usd": 16100.00,
-            },
         },
         {  # 2 - benign cross-venue arbitrage
             "key": "benign-arbitrage",
@@ -79,18 +70,6 @@ def bundles_spec(victim_hex: str) -> list[dict]:
             "extracted_cents": 231_000,
             "loss_cents": 0,
             "priority_gwei": 38,
-            "trace": {
-                "block": 21450140, "same_block": "false",
-                "victim_block_offset": 28,
-                "bot_leg1": "buy WETH on Uniswap V3 (pool below external price)",
-                "bot_leg2": "sell WETH on Curve (pool above external price)",
-                "legs_on_same_pool": "false",
-                "pool_price_before": 3092.10, "pool_price_after": 3099.40,
-                "external_ref_price": 3100.00, "cross_venue_gap_bps": 45,
-                "victim_price_impact_from_bot_bps": 0.4,
-                "frontrun_priority_gwei": 38, "victim_priority_gwei": 35,
-                "bot_net_profit_usd": 2310.00, "victim_loss_usd": 0.00,
-            },
         },
         {  # 3 - left PENDING, ready for a steward to evaluate from the UI
             "key": "pending-review",
@@ -101,15 +80,6 @@ def bundles_spec(victim_hex: str) -> list[dict]:
             "extracted_cents": 612_500,
             "loss_cents": 388_000,
             "priority_gwei": 140,
-            "trace": {
-                "block": 21450377, "same_block": "true",
-                "tx_index_frontrun": 12, "tx_index_victim": 14, "tx_index_backrun": 19,
-                "unrelated_txs_between": 5,
-                "pool_price_before": 64210.00, "pool_price_after_frontrun": 64290.00,
-                "pool_price_after_backrun": 64244.00, "external_ref_price": 64238.00,
-                "frontrun_priority_gwei": 140, "victim_priority_gwei": 22,
-                "bot_net_profit_usd": 6125.00, "victim_loss_usd": 3880.00,
-            },
         },
     ]
 
@@ -143,6 +113,14 @@ def do_seed() -> None:
         rec["reference_feed"] = {"url": REFERENCE_FEED, "tx": h, "tx_url": tx_link(h)}
         save_deployment(dep)
 
+    # -- governor-verified telemetry gateway ----------------------------------------
+    if read(client, account, addr, "get_telemetry_gateway") != TELEMETRY_GATEWAY:
+        log("Setting the telemetry gateway ...")
+        h, _ = send_write(client, account, addr, "set_telemetry_gateway", [TELEMETRY_GATEWAY],
+                          label="set_telemetry_gateway")
+        rec["telemetry_gateway"] = {"url": TELEMETRY_GATEWAY, "tx": h, "tx_url": tx_link(h)}
+        save_deployment(dep)
+
     # -- builders + bonds -----------------------------------------------------------
     have = {s["sequencer_address"]: s for s in read(client, account, addr, "get_all_sequencers")}
     for name, bond in BUILDERS:
@@ -159,7 +137,7 @@ def do_seed() -> None:
 
     # -- bundles ---------------------------------------------------------------------
     existing = {b["victim_tx_hash"]: b for b in read(client, account, addr, "get_all_bundles")}
-    for n, spec in enumerate(bundles_spec(account.address.lower()), start=1):
+    for spec in bundles_spec(account.address.lower()):
         v, f, b = (synthetic_hash(f"{spec['key']}:{k}") for k in ("victim", "frontrun", "backrun"))
         if v in existing:
             bid = existing[v]["bundle_id"]
@@ -167,12 +145,13 @@ def do_seed() -> None:
             rec["bundles"].setdefault(spec["key"], {"bundle_id": bid})
             continue
         builder_key = synthetic_address(spec["builder"])
-        log(f"Submitting bundle '{spec['key']}' against {spec['builder']} ...")
+        log(f"Submitting bundle '{spec['key']}' against {spec['builder']} "
+            f"(reporter bond {fmt_gen(REPORTER_BOND)}) ...")
         h, _ = send_write(
             client, account, addr, "submit_mempool_bundle",
             [builder_key, spec["victim"], v, f, b, spec["pair"], spec["slippage_bps"],
-             spec["extracted_cents"], spec["loss_cents"], spec["priority_gwei"],
-             trace_url(n, spec["trace"])],
+             spec["extracted_cents"], spec["loss_cents"], spec["priority_gwei"]],
+            value=REPORTER_BOND,
             label=f"submit_mempool_bundle[{spec['key']}]",
         )
         bundles = read(client, account, addr, "get_all_bundles")
@@ -211,6 +190,8 @@ def do_evaluate(ref: str) -> None:
     log(f"  verdict     : {verdict['classification']} (toxic={verdict['is_toxic']}, confidence {verdict['confidence']})")
     log(f"  consensus   : {verdict['consensus_state']}  votes={list(votes.values())}")
     log(f"  slashed     : {fmt_gen(int(verdict['slashed_amount']))}")
+    log(f"  reporter    : bond {'returned' if verdict.get('reporter_bond_returned') else 'forfeited'}, "
+        f"bounty {fmt_gen(int(verdict.get('reporter_bounty', 0)))}")
     log(f"  builder     : {seq_before['status']} {fmt_gen(int(seq_before['staked_amount']))} -> "
         f"{seq_after['status']} {fmt_gen(int(seq_after['staked_amount']))}")
     log(f"  rationale   : {verdict['forensic_rationale']}")
@@ -225,6 +206,8 @@ def do_evaluate(ref: str) -> None:
         "consensus_state": verdict["consensus_state"],
         "validator_votes": list(votes.values()),
         "slashed_amount_wei": verdict["slashed_amount"],
+        "reporter_bounty_wei": verdict.get("reporter_bounty", "0"),
+        "reporter_bond_returned": verdict.get("reporter_bond_returned"),
         "builder": before["builder_name"],
         "builder_status_after": seq_after["status"],
         "rationale": verdict["forensic_rationale"],
@@ -251,7 +234,8 @@ def do_status() -> None:
     log(f"Deployer balance: {fmt_gen(balance(client, account.address))}")
     log(json.dumps(read(client, account, addr, "get_protocol_metrics"), indent=2))
     for s in read(client, account, addr, "get_all_sequencers"):
-        log(f"  builder {s['name']:<24} {s['status']:<13} bond {fmt_gen(int(s['staked_amount']))}  slashed {fmt_gen(int(s['total_slashed']))}  rep {s['reputation_score']}")
+        unbond = f"  unbonding until {s['unstake_available_at']}" if s.get("unstake_available_at") else ""
+        log(f"  builder {s['name']:<24} {s['status']:<13} bond {fmt_gen(int(s['staked_amount']))}  slashed {fmt_gen(int(s['total_slashed']))}  rep {s['reputation_score']}{unbond}")
     for b in read(client, account, addr, "get_all_bundles"):
         log(f"  bundle #{b['bundle_id']} {b['status']:<8} {b['dex_pair']:<32} builder={b['builder_name']}")
     for v in read(client, account, addr, "get_all_verdicts"):
