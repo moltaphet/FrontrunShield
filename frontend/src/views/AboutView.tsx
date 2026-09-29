@@ -65,8 +65,8 @@ export function AboutView() {
             <li>Deterministic clamp: no extracted value, or victim slippage under 0.5%, can never be toxic - whatever the model says.</li>
             <li>Confidence below 60 is treated as inconclusive: the builder keeps the bond.</li>
             <li>Self-contradicting or unparseable model output reverts the round instead of settling.</li>
-            <li>Deterministic telemetry: reporters cannot name a URL. Evidence is fetched from a governor-verified gateway using the three tx hashes; no verifiable telemetry means no slash. Untrusted text is ASCII-sanitised and tag-isolated.</li>
-            <li>Reporter bond: every report escrows 0.05 GEN. Toxic verdict: bond back plus a 10% bounty from the slash (victims receive the other 90%). Benign or inconclusive: the bond is forfeited to the insurance pool, so false accusations are never free.</li>
+            <li>Strict telemetry: reporters cannot name a URL. Each tx is read from a governor-verified gateway and must be a real record whose own hash matches; same block, frontrun &lt; victim &lt; backrun, one bot sender, and the named victim must be the victim tx’s sender. Echo services and fabricated hashes fail and resolve INCONCLUSIVE before any model call. Untrusted text is ASCII-sanitised and tag-isolated.</li>
+            <li>Reporter bond: every report escrows 0.05 GEN. Toxic verdict: bond back plus a 10% bounty from the slash (victims receive the other 90%). Explicit benign ruling: the bond is forfeited to the insurance pool, so false accusations are never free. Inconclusive (unverifiable evidence, outages): the bond is refunded. Surplus pool funds (forfeits, lapsed victim shares) can be allocated by the governor; still-claimable victim shares are reserved.</li>
             <li>Builder unbonding: request, a 3-day cooldown during which the bond stays slashable, then release, and only with zero pending bundles.</li>
             <li>Inconclusive reports may be re-filed, so a junk report cannot censor a real attack.</li>
             <li>Pull-pattern restitution with checks-effects-interactions and a rollback if the transfer cannot be queued.</li>

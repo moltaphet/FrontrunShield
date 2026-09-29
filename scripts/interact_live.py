@@ -4,21 +4,21 @@
     .venv/bin/python scripts/interact_live.py evaluate 1  # run consensus forensics on bundle 1
     .venv/bin/python scripts/interact_live.py claim 1     # victim claims restitution (deployer is the victim of bundle 1)
     .venv/bin/python scripts/interact_live.py status      # dump metrics, builders, bundles, verdicts
-    .venv/bin/python scripts/interact_live.py all         # seed + evaluate the toxic and benign bundles
+    .venv/bin/python scripts/interact_live.py all         # seed + evaluate the real toxic bundle and the fabricated one
 
 Every write carries the ~0.1 GEN Studio Next fee deposit (see common.send_write).
 `seed` is idempotent: it reads on-chain state first and only sends what is missing.
 
 Every bundle report escrows the mandatory 0.05 GEN reporter bond (returned plus a
-10% bounty on a toxic verdict, forfeited otherwise). Reporters cannot name a
-telemetry URL: the contract derives it as `<gateway>/<victim>/<frontrun>/<backrun>`
+10% bounty on a toxic verdict, refunded when INCONCLUSIVE, forfeited only on an
+explicit BENIGN ruling). Reporters cannot name a
+telemetry URL: the contract derives each as `<gateway>/<tx_hash>`
 from the governor-set gateway, which `seed` configures.
 
-The bundle transaction hashes are synthetic (keccak of a label) - they are demo
-traces, not real mainnet transactions. The demo gateway is httpbin's echo
-endpoint, so it proves the endpoint is reachable and derived from the hashes but
-carries no trace content; a production deployment points the gateway at an
-indexer or RPC-backed trace service.
+Telemetry: the gateway is Blockscout's transaction API, which answers 404 for unknown
+hashes. Bundle #1 uses a real mainnet triple (so it passes strict verification); #2 and
+#3 use fabricated hashes (the audit PoC) and resolve INCONCLUSIVE with a refunded bond.
+The slippage / profit / loss figures on bundle #1 are illustrative reporter claims.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from common import (  # noqa: E402
 )
 
 REFERENCE_FEED = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
-TELEMETRY_GATEWAY = "https://httpbin.org/anything/frontrunshield/trace"
+TELEMETRY_GATEWAY = "https://eth.blockscout.com/api/v2/transactions"  # 404s unknown txs
 REPORTER_BOND = GEN // 20  # 0.05 GEN, must accompany every submit_mempool_bundle
 
 BUILDERS = [
@@ -49,20 +49,35 @@ BUILDERS = [
 ]
 
 
-def bundles_spec(victim_hex: str) -> list[dict]:
+# A real bracketed swap on Ethereum mainnet (block 26084998, positions 242 / 243 / 245):
+# one sender calls the same aggregator immediately before and after another
+# sender's swap. Whether it is a *sandwich* is exactly what the committee decides;
+# the slippage / profit / loss numbers below are ILLUSTRATIVE reporter claims,
+# not measured values.
+REAL = {
+    "victim": "0x44d09b1f74233d59d377444461784e862b593d8da080e5eef8c8adc860e6eb67",
+    "frontrun": "0xa7dc6893a00ec5a279297ed3381a2fe0d260410f87e328c27a54b54b857b478f",
+    "backrun": "0x93bea253871cd7439c99129d657e8fea1f8782e6e3e704314c6443ad806dbd61",
+    "victim_address": "0xce9f4e0fd41078d903286deebe3f3bc81e38d247",
+}
+
+
+def bundles_spec(_deployer: str) -> list[dict]:
     return [
-        {  # 1 - blatant Uniswap sandwich
+        {  # 1 - real mainnet triple: passes strict telemetry verification
             "key": "toxic-sandwich",
             "builder": "Titan Builder #04",
-            "victim": victim_hex,
-            "pair": "WETH/USDC Uniswap V3 0.05%",
-            "slippage_bps": 495,
-            "extracted_cents": 1_842_000,
-            "loss_cents": 1_610_000,
-            "priority_gwei": 412,
+            "victim": REAL["victim_address"],
+            "hashes": (REAL["victim"], REAL["frontrun"], REAL["backrun"]),
+            "pair": "Aggregator swap (mainnet block 26084998)",
+            "slippage_bps": 150,
+            "extracted_cents": 250_000,
+            "loss_cents": 180_000,
+            "priority_gwei": 30,
         },
-        {  # 2 - benign cross-venue arbitrage
-            "key": "benign-arbitrage",
+        {  # 2 - the auditor's PoC shape: fabricated hashes. The gateway 404s them, so
+           # the round is INCONCLUSIVE, nothing is slashed and the bond is refunded.
+            "key": "fabricated-hashes",
             "builder": "BeaverBuild Relay",
             "victim": "",
             "pair": "WETH/USDT Uniswap V3 vs Curve",
@@ -71,7 +86,7 @@ def bundles_spec(victim_hex: str) -> list[dict]:
             "loss_cents": 0,
             "priority_gwei": 38,
         },
-        {  # 3 - left PENDING, ready for a steward to evaluate from the UI
+        {  # 3 - fabricated and left PENDING for a steward to evaluate from the UI
             "key": "pending-review",
             "builder": "Eden Sequencer",
             "victim": "",
@@ -138,7 +153,8 @@ def do_seed() -> None:
     # -- bundles ---------------------------------------------------------------------
     existing = {b["victim_tx_hash"]: b for b in read(client, account, addr, "get_all_bundles")}
     for spec in bundles_spec(account.address.lower()):
-        v, f, b = (synthetic_hash(f"{spec['key']}:{k}") for k in ("victim", "frontrun", "backrun"))
+        v, f, b = spec.get("hashes") or (
+            synthetic_hash(f"{spec['key']}:{k}") for k in ("victim", "frontrun", "backrun"))
         if v in existing:
             bid = existing[v]["bundle_id"]
             log(f"Bundle exists: #{bid} {spec['key']}")
@@ -250,7 +266,7 @@ def main() -> None:
     sub.add_parser("all")
     for name in ("evaluate", "claim"):
         p = sub.add_parser(name)
-        p.add_argument("bundle", help="bundle id or seed key (toxic-sandwich | benign-arbitrage | pending-review)")
+        p.add_argument("bundle", help="bundle id or seed key (toxic-sandwich | fabricated-hashes | pending-review)")
     args = ap.parse_args()
     if args.cmd == "seed":
         do_seed()
@@ -263,7 +279,7 @@ def main() -> None:
     elif args.cmd == "all":
         do_seed()
         do_evaluate("toxic-sandwich")
-        do_evaluate("benign-arbitrage")
+        do_evaluate("fabricated-hashes")
         do_status()
 
 

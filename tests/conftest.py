@@ -14,6 +14,7 @@ BOND = GEN  # 1 GEN
 REPORTER_BOND = GEN // 20  # 0.05 GEN, mandatory with every bundle report
 BOUNTY_BPS = 1000
 COOLDOWN = 3 * 24 * 3600
+RESTITUTION_WINDOW = 90 * 24 * 3600
 
 BUILDER_A = "0x" + "a1" * 20
 BUILDER_B = "0x" + "b2" * 20
@@ -23,7 +24,9 @@ TX_V = "0x" + "01" * 32
 TX_F = "0x" + "02" * 32
 TX_B = "0x" + "03" * 32
 
-GATEWAY = "https://telemetry.frontrunshield.example/trace"
+GATEWAY = "https://telemetry.frontrunshield.example/tx"
+BOT = "0x" + "d4" * 20  # the sandwich bot's address in the fixture traces
+BLOCK = 21_450_112
 REFERENCE = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
 
 
@@ -84,8 +87,40 @@ def submit(c, vm, who, builder=BUILDER_A, victim=VICTIM, txs=(TX_V, TX_F, TX_B),
         vm.value = 0
 
 
-def mock_feeds(vm, trace=None, ref=None):
-    vm.mock_web(r".*telemetry.*", {"status": 200, "body": json.dumps(trace or {"same_block": True})})
+def triple(n):
+    """Distinct tx-hash triples so several bundles can coexist."""
+    return tuple("0x" + (f"{n:02x}" + f"{0xa0 + i:02x}") * 16 for i in range(3))
+
+
+def tx_record(tx_hash, sender, position, block=BLOCK, **extra):
+    """A structured transaction record in the Blockscout shape."""
+    rec = {"hash": tx_hash, "from": {"hash": sender}, "to": {"hash": "0x" + "e5" * 20},
+           "block_number": block, "position": position, "status": "ok",
+           "gas_price": 30 * 10**9, "method": "swapExactTokensForTokens"}
+    rec.update(extra)
+    return rec
+
+
+def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, **overrides):
+    """Serve a genuine-looking sandwich for one triple: frontrun -> victim -> backrun.
+    `overrides` maps role (victim/frontrun/backrun) -> dict of field overrides,
+    or None to make that tx a 404."""
+    roles = (("victim", txs[0], victim_sender, 42), ("frontrun", txs[1], bot, 41), ("backrun", txs[2], bot, 43))
+    for role, h, sender, pos in roles:
+        ov = overrides.get(role, {})
+        if ov is None:
+            vm.mock_web(rf".*telemetry.*/{h}$", {"status": 404, "body": "not found"})
+            continue
+        rec = tx_record(h, sender, pos)
+        rec.update(ov)
+        vm.mock_web(rf".*telemetry.*/{h}$", {"status": 200, "body": json.dumps(rec)})
+
+
+def mock_feeds(vm, victim=VICTIM, ref=None):
+    """Valid telemetry for the default triple and triple(1..20), plus the
+    reference price feed."""
+    for txs in [(TX_V, TX_F, TX_B)] + [triple(n) for n in range(1, 21)]:
+        mock_trace(vm, txs, victim_sender=victim)
     vm.mock_web(r".*coinbase.*", {"status": 200, "body": json.dumps(ref or {"data": {"amount": "3100.00"}})})
 
 

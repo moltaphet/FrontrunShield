@@ -11,12 +11,11 @@ victim insurance pool, from which the victim can claim restitution.
 | | |
 |---|---|
 | Network | GenLayer Studio Next · chain `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
-| Contract | [`0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`](https://explorer-studio-next.genlayer.com/address/0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E) |
+| Contract | [`0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2`](https://explorer-studio-next.genlayer.com/address/0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2) |
 | Source verified | On-chain source (`gen_getContractCode`) is byte-identical to `contracts/frontrun_shield.py` (sha256 in `deployments/studio-next.json`) |
-| Deploy tx | [`0xf0f36cbe…0cfc`](https://explorer-studio-next.genlayer.com/transactions/0xf0f36cbeaa710a589f24672bcda0ede3bac174cfb1dabe5507a3c4b86cc40cfc) (v2, patched; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`) |
-| **Live slashing tx** | [`0x25cb9e86…e75e`](https://explorer-studio-next.genlayer.com/transactions/0x25cb9e8607f986aa3387b5204e4eac32337ff783974c085af54a8f360325e75e) - `TOXIC_SANDWICH`, confidence 95, builder bond 0.4 → 0.2 GEN, reporter got bond back + 0.02 GEN bounty |
-| Live benign tx | [`0x9f6db9cb…d668`](https://explorer-studio-next.genlayer.com/transactions/0x9f6db9cbd6978b0f3968e902da1d70d6cfee888ff6615bd3a551ee6f1856d668) - `BENIGN_ARBITRAGE`, builder cleared, reporter's 0.05 GEN bond forfeited to the pool |
-| Restitution claim | [`0x819e91e1…07fe`](https://explorer-studio-next.genlayer.com/transactions/0x819e91e1466ea6be2dfddcdb829dddc2bea88fbe34aa8a79834c0400557707fe) - victim of bundle #1 claimed the 0.18 GEN victim share |
+| Deploy tx | [`0xacab6500…888b`](https://explorer-studio-next.genlayer.com/transactions/0xacab6500598f2bb989c30c7447f91aa3559b3f89e8666530dae6c528dbee888b) (v3; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`, `0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`) |
+| **Live slashing tx** | [`0x94bed37c…5d0e`](https://explorer-studio-next.genlayer.com/transactions/0x94bed37c4056b739a829bd7d2699d277839c35b1c503bfe0b1156c4762cb5d0e) - real mainnet triple passed strict verification, `TOXIC_SANDWICH` (confidence 95), builder bond 0.4 → 0.2 GEN, reporter got bond + 0.02 GEN bounty |
+| Live audit-PoC tx | [`0xe67b3f52…67f5`](https://explorer-studio-next.genlayer.com/transactions/0xe67b3f521438b2ae09e4b90fb87c8b699905ff63551b23500463cb4488f567f5) - fabricated hashes, `INCONCLUSIVE` ("Telemetry rejected"), zero slash, reporter bond refunded |
 
 ## Why a smart contract can't do this (theory)
 
@@ -85,48 +84,59 @@ Slash = 50% of the *remaining* bond, so it can never exceed the stake.
 
 ## Economic security model
 
-The first version (`df376dd`) scored 3.5/10 on an economic audit: reporting was free, so anyone
-could grief builders at zero cost; reporters chose the evidence URL, so they could serve forged
-evidence; a junk report could permanently censor a real one; and builders could withdraw before
-a verdict. This version closes each hole.
+The first version (`df376dd`) scored 3.5/10 on an economic audit. The follow-up (`3ded865`)
+added reporter bonds but the demo gateway was an httpbin echo that answers HTTP 200 to anything,
+so fabricated hashes could still reach the model and slash an honest builder. Security is now
+layered; every layer is enforced on-chain and covered by tests.
 
-**Reporter bonding.** `submit_mempool_bundle` must carry exactly `REPORTER_BOND` = 0.05 GEN,
-held in `reporter_escrow` until the verdict.
+**1. Reporter bond.** `submit_mempool_bundle` must carry exactly `REPORTER_BOND` = 0.05 GEN,
+escrowed until the verdict.
 
-| Verdict | Reporter | Builder | Pool |
+| Outcome | Reporter | Builder | Pool |
 |---|---|---|---|
-| `TOXIC_SANDWICH` | bond back + **10%** of the slash (bounty) | loses 50% of its bond | slash − bounty (victim share) |
-| `BENIGN_ARBITRAGE` | bond **forfeited** | cleared, +reputation | + forfeited bond |
-| `INCONCLUSIVE` (incl. no telemetry, low confidence, deterministic clamp) | bond **forfeited** | untouched | + forfeited bond |
+| `TOXIC_SANDWICH` | bond back + **10%** of the slash | loses 50% of its bond | slash − bounty (victim share) |
+| `BENIGN_ARBITRAGE` (explicit ruling) | bond **forfeited** | cleared, +reputation | + forfeited bond |
+| `INCONCLUSIVE` (unverifiable evidence, gateway outage, model shrug, deterministic clamp) | bond **refunded** | untouched | unchanged |
 
-**Slashing restitution.** The bounty is carved out of the slash, never extra stake, so
-`total_slashed = bounties_paid + victim pool`. `claim_restitution` pays the victim only the
-victim share (slash − bounty). Accounting reconciles as
-`insurance_pool + restitution_paid + bounties_paid = total_slashed + bonds_forfeited`
-(asserted after every test step) and `check_solvency` covers bonds + pool + reporter escrow.
+Only a committee ruling that the accusation was wrong costs the reporter anything.
 
-**Deterministic telemetry.** Reporters no longer pass a URL. The evidence endpoint is
-`<gateway>/<victim_tx>/<frontrun_tx>/<backrun_tx>`, where the gateway is set by the governor
-(`set_telemetry_gateway`, SSRF-guarded) and the hashes are regex-validated. If validators cannot
-fetch telemetry the leader returns `INCONCLUSIVE` without asking the model; the contract never
-slashes on the reporter's word alone.
+**2. Strict telemetry verification (no blind trust in HTTP 200).** Reporters cannot name a URL.
+Each tx is read from `<governor gateway>/<tx_hash>` and must be a structured transaction record:
+* the record's **own `hash` field** equals the requested hash (an echo of the request URL, `{}`,
+  HTML, a list, or a hash merely mentioned in text is rejected), with a sender, block and position;
+* all three in **one block**, ordered **frontrun < victim < backrun**, frontrun and backrun from
+  the **same sender**, victim not the bot, no failed txs;
+* the **claimed victim must equal the victim tx's sender** (skipped only when no victim is named,
+  which also means nobody can claim restitution).
 
-**Replay recovery.** The replay guard maps the hash triple to its latest bundle. Only an
-`INCONCLUSIVE` bundle may be re-filed (with a fresh bond); `PENDING`, `TOXIC` and `BENIGN` may not.
+Any failure returns `INCONCLUSIVE` before the model is called, so a compromised or echo gateway
+cannot be talked into a slash. The prompt receives only the extracted, sanitised facts and
+instructs validators to return INCONCLUSIVE for echoes or fabricated traces. The deployed
+gateway is Blockscout's transaction API, which answers 404 for unknown hashes.
 
-**Unbonding cooldown.** `request_builder_unstake()` starts a 3-day clock (the bond stays slashable
-and reporters can still file). `finalize_builder_unstake()` releases the full remaining bond only
-after the cooldown **and** with `pending_bundles == 0`; the state is zeroed before the transfer is
-queued and restored if queueing fails. Only the builder's own key can unstake (a sponsor
-cannot). An `EXITED` builder can't be reported until it re-stakes.
+**3. Slashing restitution.** The bounty is carved out of the slash, never extra stake.
+`insurance_pool + restitution_paid + bounties_paid + surplus_allocated = total_slashed +
+bonds_forfeited` (asserted after every test step); `check_solvency` covers bonds + pool + escrow.
+
+**4. The pool is never permanently locked.** A named victim has `RESTITUTION_WINDOW` = 90 days to
+claim; that share is *reserved*. Everything else in the pool (forfeited bonds, shares with no named
+victim, lapsed shares) is *surplus* the governor can pay out with `allocate_insurance_surplus`,
+capped at `allocatable_surplus`, so it cannot touch claimable restitution.
+
+**5. Replay recovery.** Only an `INCONCLUSIVE` bundle may be re-filed (fresh bond).
+
+**6. Unbonding cooldown.** `request_builder_unstake()` starts a 3-day clock (the bond stays
+slashable, reporters can still file). `finalize_builder_unstake()` releases the bond only after the
+cooldown **and** with `pending_bundles == 0`, CEI with rollback. Only the builder's own key can act.
 
 ## Repository layout
 
 ```
 contracts/frontrun_shield.py     GenVM intelligent contract
-tests/                           92 direct-mode tests (staking, consensus branches, slashing limits,
+tests/                           114 direct-mode tests (staking, consensus branches, slashing limits,
                                  restitution / re-entrancy, validator equivalence, reporter bonding,
-                                 deterministic telemetry, replay recovery, builder unbonding)
+                                 strict telemetry verification incl. the audit PoC, victim binding, bond
+                                 refund, insurance surplus, replay recovery, builder unbonding)
 scripts/deploy.py                key + faucet + deploy + on-chain source verification
 scripts/interact_live.py         seed | evaluate | claim | status | all
 deployments/studio-next.json     address, tx hashes, verification, seeded state
@@ -139,7 +149,7 @@ frontend/src/data/guestData.ts   rich mock dataset for Guest Mode
 ```bash
 # Python (3.12; pins mirror the working GenLayer toolchain)
 uv venv --python 3.12 && uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt
-.venv/bin/python -m pytest tests -q                     # 92 passed
+.venv/bin/python -m pytest tests -q                     # 114 passed
 .venv/bin/genvm-lint check contracts/frontrun_shield.py
 
 # Deploy + seed (generates a git-ignored, mode-600 .env with a fresh key; funds it via sim_fundAccount)
@@ -175,7 +185,7 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 | Check | Result |
 |---|---|
-| `pytest tests` | 92 passed |
+| `pytest tests` | 114 passed |
 | `genvm-lint check` | passed |
 | `npm run lint` / `npm run build` | 0 errors (tsc strict + vite) |
 | `npm run check:headless` | 30/30: zero console errors on live load, all tabs, navbar single-line at 1280/1440/1920 px, wrong-network alert + switch, guest slashing flow, unstake cooldown, report form deposit notice / no telemetry input |
@@ -183,11 +193,15 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 ## Honest limitations
 
-* **Seeded data is synthetic.** Tx hashes are keccak labels, not mainnet transactions. The demo
-  telemetry gateway is httpbin's echo endpoint: it proves the derived URL is reachable but carries
-  no trace content, so the live verdicts lean on the reporter-supplied numbers (slippage, profit,
-  loss, tip) plus the Coinbase reference price. Production must point the governor-set gateway at an
-  independent indexer/RPC trace service.
+* **Live evidence.** Bundle #1 uses a real Ethereum mainnet triple (block 26084998), so it
+  passes strict verification against Blockscout, but its slippage / profit / loss numbers are
+  illustrative reporter claims, and the tx endpoint carries no price-impact data: the verdict
+  rests on structure, fee ordering and those claims plus the Coinbase reference price.
+  Bundles #2 and #3 use fabricated hashes on purpose (the audit PoC). Real production use needs
+  a gateway with receipts / token transfers.
+* **Refunds make junk reports free** (gas / fee deposit aside): an unverifiable report locks the
+  builder's `pending_bundles` until someone calls evaluate. That was the trade-off chosen for fair
+  outage handling.
 * **Reporter-supplied numbers remain reporter-supplied.** A lying report is costly (bond forfeited)
   but a report crafted to earn a *benign* verdict on a real attack would block re-filing.
 * **Unbonding is untested live end to end**: the seeded builders are synthetic keys nobody holds

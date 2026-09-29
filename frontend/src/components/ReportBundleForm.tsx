@@ -61,12 +61,12 @@ export function ReportBundleForm() {
         <p className="text-xs leading-snug text-slate-300">
           <span className="font-bold text-amberx-400">{REPORTER_BOND_LABEL} Reporter Security Deposit.</span>{' '}
           Escrowed with your report. A <b>toxic</b> verdict returns it plus a 10% bounty from the slashed bond;
-          a <b>benign</b> or inconclusive verdict forfeits it to the insurance pool.
+          an explicit <b>benign</b> ruling forfeits it to the insurance pool. If the evidence can’t be verified (<b>inconclusive</b>) the deposit is refunded.
           {mode === 'guest' ? ' Guest mode simulates the deposit locally.' : ''}
         </p>
       </div>
       <p className="mt-2 text-xs leading-snug text-slate-500">
-        Evidence is fetched by validators from the protocol’s telemetry gateway using these three hashes - you can’t supply a URL.
+        Validators read each transaction from the protocol’s telemetry gateway and verify the payload: real records for all three hashes, one block, frontrun → victim → backrun order, one bot sender, and the victim address you name must be the victim tx’s sender. You can’t supply a URL.
       </p>
 
       <label className={label} htmlFor="r-builder">Accused builder</label>

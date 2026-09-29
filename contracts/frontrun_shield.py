@@ -17,12 +17,21 @@
 #
 # Economic security model:
 #   * Reporter bond. Every bundle report escrows REPORTER_BOND. A TOXIC verdict
-#     returns it plus a BOUNTY_BPS share of the slash; a BENIGN or INCONCLUSIVE
+#     returns it plus a BOUNTY_BPS share of the slash; an explicit BENIGN
 #     verdict forfeits it into the insurance pool, so a false accusation is
-#     never free.
-#   * Deterministic telemetry. Reporters cannot name an evidence URL. The
-#     endpoint is derived from a governor-verified gateway base URL plus the
-#     three tx hashes, so a reporter cannot serve forged evidence.
+#     never free. An INCONCLUSIVE outcome (missing / unverifiable evidence,
+#     gateway outage, model shrug) refunds it: the reporter is not punished for
+#     evidence the protocol could not check.
+#   * Strict telemetry. Reporters cannot name an evidence URL: each tx is read
+#     from `<governor gateway>/<tx_hash>`. HTTP 200 is not trusted. The payload
+#     must be a structured transaction whose own `hash` equals the requested
+#     hash, all three must sit in one block in frontrun < victim < backrun order,
+#     frontrun and backrun must share a sender, and the reported victim must be
+#     the victim tx's sender. Echo services, empty bodies and fabricated hashes
+#     fail these checks and short-circuit to INCONCLUSIVE before any model call.
+#   * Insurance pool. Forfeited bonds and lapsed / unclaimable victim shares
+#     are "surplus" the governor can allocate; shares still claimable by a
+#     named victim are reserved and can never be touched.
 #   * Unbonding. Builders exit via request -> cooldown -> finalize, and only
 #     with zero pending bundles, so a builder cannot dodge a slash by running.
 #   * Replay. An INCONCLUSIVE bundle (no verifiable evidence) may be re-reported;
@@ -74,6 +83,8 @@ BPS = 10000
 REPORTER_BOND = GEN // 20    # 0.05 GEN escrowed with every bundle report
 BOUNTY_BPS = 1000            # 10% of a slash goes to the winning reporter
 UNSTAKE_COOLDOWN = 3 * 24 * 3600  # seconds between unstake request and release
+RESTITUTION_WINDOW = 90 * 24 * 3600  # a named victim has this long to claim
+MAX_TRACE_BYTES = 500_000    # per-tx telemetry body cap
 MIN_TOXIC_SLIPPAGE_BPS = 50  # below this the victim was not meaningfully harmed
 MIN_TOXIC_CONFIDENCE = 60    # benefit of the doubt goes to the builder
 CONFIDENCE_TOLERANCE = 35    # validator agreement band on confidence
@@ -158,20 +169,123 @@ def _fetch_feed(url: str) -> dict:
     return {"reachable": True, "text": _sanitize(str(body), MAX_TELEMETRY_CHARS)}
 
 
-def _telemetry_url(base: str, victim_tx: str, frontrun_tx: str, backrun_tx: str) -> str:
-    """Evidence endpoint derived only from the governor-verified gateway and the
-    (regex-validated) bundle tx hashes. No reporter-controlled string reaches it."""
+def _telemetry_url(base: str, tx_hash: str) -> str:
+    """Per-tx evidence endpoint derived only from the governor-verified gateway
+    and a regex-validated tx hash. No reporter-controlled string reaches it."""
     if base == "":
         return ""
-    return f"{base.rstrip('/')}/{victim_tx}/{frontrun_tx}/{backrun_tx}"
+    return f"{base.rstrip('/')}/{tx_hash}"
+
+
+def _fetch_json(url: str):
+    """One structured telemetry read. Returns the parsed JSON object or None for
+    anything else (bad URL, non-2xx incl. 404, oversized, non-JSON, non-object).
+    Never raises."""
+    if url == "" or not _is_safe_url(url):
+        return None
+    try:
+        res = gl.nondet.web.get(url)
+    except Exception:
+        return None
+    status = getattr(res, "status", None)
+    if status is None:
+        status = getattr(res, "status_code", None)
+    if not (isinstance(status, int) and 200 <= status < 300):
+        return None
+    body = res.body
+    if isinstance(body, (bytes, bytearray)):
+        if len(body) > MAX_TRACE_BYTES:
+            return None
+        body = bytes(body).decode("utf-8", errors="replace")
+    body = str(body)
+    if len(body) > MAX_TRACE_BYTES:
+        return None
+    try:
+        obj = json.loads(body)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _addr_of(v) -> str:
+    if isinstance(v, dict):
+        v = v.get("hash", v.get("address", ""))
+    v = str(v).strip().lower()
+    return v if _ADDR_RE.match(v) else ""
+
+
+def _int_of(v):
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return None
+
+
+def _tx_fields(obj, want_hash: str):
+    """Extract a verified transaction record, or None. The payload's OWN hash
+    must equal the requested one; a body that merely mentions the hash (an HTTP
+    echo of the request URL, say) has no such field and is rejected. Accepts the
+    Blockscout / Etherscan-style shapes (`from` as string or {hash}, `block` or
+    `block_number`, `position` or `transaction_index`)."""
+    if not isinstance(obj, dict):
+        return None
+    if str(obj.get("hash", obj.get("tx_hash", ""))).strip().lower() != want_hash:
+        return None
+    sender = _addr_of(obj.get("from"))
+    block = _int_of(obj.get("block_number", obj.get("block")))
+    pos = _int_of(obj.get("position", obj.get("transaction_index")))
+    if sender == "" or block is None or pos is None or block < 0 or pos < 0:
+        return None
+    status = str(obj.get("status", obj.get("result", "ok"))).strip().lower()
+    if status in ("error", "failed", "fail", "reverted", "0"):
+        return None
+    gas_price = _int_of(obj.get("gas_price"))
+    return {
+        "hash": want_hash,
+        "sender": sender,
+        "to": _addr_of(obj.get("to")),
+        "block": block,
+        "position": pos,
+        "gas_gwei": (gas_price // 10**9) if gas_price is not None and gas_price >= 0 else -1,
+        "method": _sanitize(obj.get("method", ""), 40),
+    }
+
+
+def _verify_trace(txs: list, victim_hex: str):
+    """txs = [victim, frontrun, backrun] records (or None). Returns
+    (ok, reason, facts). Purely structural: it decides only whether the
+    evidence is real and shaped like a sandwich, never whether it is toxic."""
+    labels = ("victim", "frontrun", "backrun")
+    for label, t in zip(labels, txs):
+        if t is None:
+            return False, f"{label} tx missing or not a verified transaction record", ""
+    v, f, b = txs
+    if not (v["block"] == f["block"] == b["block"]):
+        return False, "bundle txs are not in the same block", ""
+    if not (f["position"] < v["position"] < b["position"]):
+        return False, "frontrun / victim / backrun are not ordered around the victim", ""
+    if f["sender"] != b["sender"]:
+        return False, "frontrun and backrun have different senders", ""
+    if v["sender"] == f["sender"]:
+        return False, "victim tx was sent by the bot itself", ""
+    if victim_hex != "" and victim_hex != v["sender"]:
+        return False, "claimed victim is not the sender of the victim tx", ""
+    facts = "\n".join(
+        f"{lab}: sender {t['sender']} to {t['to'] or 'n/a'} block {t['block']} "
+        f"position {t['position']} gas_price_gwei {t['gas_gwei']} method {t['method'] or 'n/a'}"
+        for lab, t in zip(labels, txs)
+    )
+    facts += "\nchecks passed: same block, frontrun<victim<backrun, bot sender shared, victim sender bound"
+    return True, "", facts
 
 
 def _cents_to_usd(cents: int) -> str:
     return f"{int(cents) // 100}.{int(cents) % 100:02d}"
 
 
-def _build_prompt(ctx: dict, primary: dict, reference: dict) -> str:
-    primary_txt = primary["text"] if primary["reachable"] else "UNAVAILABLE"
+def _build_prompt(ctx: dict, facts: str, reference: dict) -> str:
     reference_txt = reference["text"] if reference["reachable"] else "UNAVAILABLE"
     return f"""You are an MEV forensic analyst on a decentralized validator committee.
 Decide whether the transaction bundle below is a TOXIC SANDWICH ATTACK or a
@@ -201,8 +315,11 @@ bot_extracted_value_usd: {ctx["extracted_usd"]}
 victim_loss_usd: {ctx["loss_usd"]}
 frontrun_priority_fee_gwei: {ctx["priority_gwei"]}
 
-=== 3. BUNDLE TELEMETRY (independent trace endpoint) ===
-<untrusted_trace_telemetry>{primary_txt}</untrusted_trace_telemetry>
+=== 3. VERIFIED ON-CHAIN TELEMETRY (structural checks already passed) ===
+Verify that the telemetry contains authentic swap receipts for the target bundle. If
+the payload is merely an HTTP echo or contains fabricated traces without orderbook
+price impact, you MUST return INCONCLUSIVE.
+<untrusted_trace_telemetry>{facts}</untrusted_trace_telemetry>
 
 === 4. EXTERNAL REFERENCE PRICE FEED (independent endpoint) ===
 <untrusted_reference_feed>{reference_txt}</untrusted_reference_feed>
@@ -356,6 +473,7 @@ class FrontrunShield(gl.contract.Contract):
     reporter_escrow: u256    # reporter bonds held for PENDING bundles
     bonds_forfeited: u256    # lifetime reporter bonds moved into the pool
     bounties_paid: u256      # lifetime bounties paid to winning reporters
+    surplus_allocated: u256  # lifetime pool surplus paid out by the governor
     bundles_analyzed: u256
     governor: Address
     reference_feed_url: str  # independent external price feed (governor-set)
@@ -371,6 +489,7 @@ class FrontrunShield(gl.contract.Contract):
         self.reporter_escrow = 0
         self.bonds_forfeited = 0
         self.bounties_paid = 0
+        self.surplus_allocated = 0
         self.bundles_analyzed = 0
         self.governor = gl.message.sender_address
         self.reference_feed_url = ""
@@ -400,6 +519,9 @@ class FrontrunShield(gl.contract.Contract):
             "reporter_escrow": str(self.reporter_escrow),
             "bonds_forfeited": str(self.bonds_forfeited),
             "bounties_paid": str(self.bounties_paid),
+            "surplus_allocated": str(self.surplus_allocated),
+            "allocatable_surplus": str(self._surplus()),
+            "restitution_window": RESTITUTION_WINDOW,
             "reporter_bond": str(REPORTER_BOND),
             "bounty_bps": BOUNTY_BPS,
             "unstake_cooldown": UNSTAKE_COOLDOWN,
@@ -604,9 +726,9 @@ class FrontrunShield(gl.contract.Contract):
                 "loss_usd": _cents_to_usd(int(b.victim_loss_usd_cents)),
                 "priority_gwei": int(b.frontrun_priority_gwei),
                 "extracted_cents": int(b.bot_extracted_value_usd_cents),
+                "victim_hex": b.victim_hex,
             },
-            _telemetry_url(self.telemetry_gateway, b.victim_tx_hash, b.frontrun_tx_hash,
-                           b.backrun_tx_hash),
+            self.telemetry_gateway,
             self.reference_feed_url,
         )
 
@@ -614,6 +736,7 @@ class FrontrunShield(gl.contract.Contract):
         seq = self.sequencers[b.builder_hex]
         slashed = 0
         bounty = 0
+        payout = 0
         bond = int(b.reporter_bond)
         self.reporter_escrow -= bond
         if result["is_toxic"]:
@@ -632,16 +755,19 @@ class FrontrunShield(gl.contract.Contract):
             self.insurance_pool += slashed - bounty  # victims get the rest
             self.bounties_paid += bounty
             b.status = BUNDLE_TOXIC
+            payout = bond + bounty
+        elif result["classification"] == "INCONCLUSIVE":
+            # Evidence missing / unverifiable / model shrug: nobody is punished.
+            # The reporter gets the bond back and may re-file.
+            b.status = BUNDLE_INCONCLUSIVE
+            payout = bond
         else:
-            # The accusation failed: the reporter's bond funds the pool.
+            # Explicit BENIGN_ARBITRAGE: a false accusation forfeits the bond.
             self.insurance_pool += bond
             self.bonds_forfeited += bond
-            if result["classification"] == "INCONCLUSIVE":
-                b.status = BUNDLE_INCONCLUSIVE  # no reputation change either way
-            else:
-                b.status = BUNDLE_BENIGN
-                rep = int(seq.reputation_score) + REP_CLEAR_BONUS
-                seq.reputation_score = rep if rep < REP_MAX else REP_MAX
+            b.status = BUNDLE_BENIGN
+            rep = int(seq.reputation_score) + REP_CLEAR_BONUS
+            seq.reputation_score = rep if rep < REP_MAX else REP_MAX
         seq.pending_bundles -= 1
         if seq.status == ST_REVIEW and seq.pending_bundles == 0:
             seq.status = ST_ACTIVE
@@ -659,23 +785,24 @@ class FrontrunShield(gl.contract.Contract):
             forensic_rationale=result["rationale"],
             slashed_amount=slashed,
             reporter_bounty=bounty,
-            reporter_bond_returned=result["is_toxic"],
+            reporter_bond_returned=payout > 0,
             timestamp=self._now(),
         )
         b.verdict_id = vid
         self.bundles[bundle_id] = b
         self.bundles_analyzed += 1
 
-        # ---- Interaction: a winning reporter gets bond + bounty back. A failed
-        # enqueue raises, which reverts every effect above (bundle stays PENDING).
-        if result["is_toxic"]:
+        # ---- Interaction: a winning (bond + bounty) or inconclusive (bond) report
+        # is paid out. A failed enqueue raises, which reverts every effect above
+        # (the bundle stays PENDING and can be re-evaluated).
+        if payout > 0:
             try:
-                gl.chain.Account(Address(b.reporter_hex)).emit_transfer(bond + bounty, on="finalized")
+                gl.chain.Account(Address(b.reporter_hex)).emit_transfer(payout, on="finalized")
             except Exception:
                 raise gl.vm.UserError(f"{ERR_EXPECTED} reporter payout could not be queued")
         return result["classification"]
 
-    def _adjudicate(self, ctx: dict, telemetry_url: str, reference_url: str) -> dict:
+    def _adjudicate(self, ctx: dict, gateway_url: str, reference_url: str) -> dict:
         """Leader/validator round. Closures capture plain locals only - never
         `self`. Validators re-run the whole forensic pipeline (fresh telemetry,
         fresh model call) and agree iff the verdict flag matches and the
@@ -684,17 +811,22 @@ class FrontrunShield(gl.contract.Contract):
         extracted = int(ctx["extracted_cents"])
 
         def leader_fn() -> dict:
-            primary = _fetch_feed(telemetry_url)
-            if not primary["reachable"]:
-                # No independent evidence: never slash on the reporter's word.
+            hashes = (ctx["victim_tx"], ctx["frontrun_tx"], ctx["backrun_tx"])
+            records = []
+            for h in hashes:
+                obj = _fetch_json(_telemetry_url(gateway_url, h))
+                records.append(_tx_fields(obj, h) if obj is not None else None)
+            ok, reason, facts = _verify_trace(records, ctx["victim_hex"])
+            if not ok:
+                # Unverifiable evidence: never call the model, never slash.
                 return {
                     "is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
-                    "rationale": "No verifiable telemetry from the gateway for these tx hashes; "
-                                 "the report may be re-filed once evidence is available.",
+                    "rationale": _sanitize(f"Telemetry rejected: {reason}. The report may be "
+                                           "re-filed once verifiable evidence exists.", MAX_RATIONALE_CHARS),
                     "telemetry_ok": False,
                 }
             reference = _fetch_feed(reference_url)
-            prompt = _build_prompt(ctx, primary, reference)
+            prompt = _build_prompt(ctx, facts, reference)
             try:
                 raw = gl.nondet.exec_prompt(prompt, response_format="json")
             except gl.vm.UserError:
@@ -753,6 +885,8 @@ class FrontrunShield(gl.contract.Contract):
         if b.restitution_claimed:
             raise gl.vm.UserError(f"{ERR_EXPECTED} restitution already claimed")
         verdict = self.verdicts[b.verdict_id]
+        if self._now() > int(verdict.timestamp) + RESTITUTION_WINDOW:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} restitution window closed")
         amount = int(verdict.slashed_amount) - int(verdict.reporter_bounty)
         if amount > int(self.insurance_pool):
             amount = int(self.insurance_pool)
@@ -785,14 +919,42 @@ class FrontrunShield(gl.contract.Contract):
 
     @gl.public.write
     def set_telemetry_gateway(self, url: str) -> None:
-        """Governor-verified base URL of the trace gateway. Bundle evidence is
-        fetched from `<base>/<victim_tx>/<frontrun_tx>/<backrun_tx>`."""
+        """Governor-verified base URL of a structured transaction API (e.g. a
+        Blockscout `/api/v2/transactions`). Each bundle tx is read from
+        `<base>/<tx_hash>`; a 404 or a payload whose own `hash` differs fails
+        verification."""
         if gl.message.sender_address != self.governor:
             raise gl.vm.UserError(f"{ERR_EXPECTED} governor only")
         clean = url.strip()
         if clean == "" or not _is_safe_url(clean) or "?" in clean or "#" in clean:
             raise gl.vm.UserError(f"{ERR_EXPECTED} unsafe telemetry gateway url")
         self.telemetry_gateway = clean
+
+    @gl.public.write
+    def allocate_insurance_surplus(self, recipient_hex: str, amount: u256) -> str:
+        """Governor-only payout of pool *surplus*: forfeited reporter bonds and
+        victim shares that can no longer be claimed (no named victim, or the
+        claim window lapsed). Shares a named victim can still claim are reserved
+        and can never be allocated, so this cannot drain restitution."""
+        if gl.message.sender_address != self.governor:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} governor only")
+        rkey = recipient_hex.strip().lower()
+        if not _ADDR_RE.match(rkey):
+            raise gl.vm.UserError(f"{ERR_EXPECTED} invalid recipient address")
+        amt = int(amount)
+        if amt == 0:
+            raise gl.vm.UserError(f"{ERR_EXPECTED} amount required")
+        if amt > self._surplus():
+            raise gl.vm.UserError(f"{ERR_EXPECTED} exceeds allocatable surplus")
+        self.insurance_pool -= amt
+        self.surplus_allocated += amt
+        try:
+            gl.chain.Account(Address(rkey)).emit_transfer(amt, on="finalized")
+        except Exception:
+            self.insurance_pool += amt
+            self.surplus_allocated -= amt
+            raise gl.vm.UserError(f"{ERR_EXPECTED} transfer could not be queued")
+        return str(amt)
 
     # -------------------------------------------------------------- unbonding
     @gl.public.write
@@ -853,6 +1015,23 @@ class FrontrunShield(gl.contract.Contract):
     def _now(self) -> int:
         return int(datetime.now(timezone.utc).timestamp())
 
+    def _reserved_restitution(self) -> int:
+        """Victim shares still claimable: TOXIC, named victim, unclaimed, and
+        inside the claim window."""
+        now = self._now()
+        total = 0
+        for i in range(1, int(self.next_bundle_id)):
+            b = self.bundles[u256(i)]
+            if b.status == BUNDLE_TOXIC and b.victim_hex != "" and not b.restitution_claimed:
+                v = self.verdicts[b.verdict_id]
+                if now <= int(v.timestamp) + RESTITUTION_WINDOW:
+                    total += int(v.slashed_amount) - int(v.reporter_bounty)
+        return total
+
+    def _surplus(self) -> int:
+        free = int(self.insurance_pool) - self._reserved_restitution()
+        return free if free > 0 else 0
+
     def _solvent(self) -> bool:
         return int(self.balance) >= (
             int(self.total_bonded) + int(self.insurance_pool) + int(self.reporter_escrow)
@@ -893,8 +1072,11 @@ class FrontrunShield(gl.contract.Contract):
             "bot_extracted_value_usd_cents": int(b.bot_extracted_value_usd_cents),
             "victim_loss_usd_cents": int(b.victim_loss_usd_cents),
             "frontrun_priority_gwei": int(b.frontrun_priority_gwei),
-            "telemetry_url": _telemetry_url(
-                self.telemetry_gateway, b.victim_tx_hash, b.frontrun_tx_hash, b.backrun_tx_hash),
+            "telemetry_urls": [
+                _telemetry_url(self.telemetry_gateway, h)
+                for h in (b.victim_tx_hash, b.frontrun_tx_hash, b.backrun_tx_hash)
+            ],
+            "telemetry_url": _telemetry_url(self.telemetry_gateway, b.victim_tx_hash),
             "reporter_bond": str(b.reporter_bond),
             "status": b.status,
             "verdict_id": int(b.verdict_id),
