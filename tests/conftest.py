@@ -24,7 +24,7 @@ TX_V = "0x" + "01" * 32
 TX_F = "0x" + "02" * 32
 TX_B = "0x" + "03" * 32
 
-GATEWAY = "https://telemetry.frontrunshield.example/tx"
+GATEWAY = "https://telemetry.frontrunshield.example/api/v2"
 BOT = "0x" + "d4" * 20  # the sandwich bot's address in the fixture traces
 BLOCK = 21_450_112
 REFERENCE = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
@@ -101,26 +101,38 @@ def tx_record(tx_hash, sender, position, block=BLOCK, **extra):
     return rec
 
 
-def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, **overrides):
-    """Serve a genuine-looking sandwich for one triple: frontrun -> victim -> backrun.
-    `overrides` maps role (victim/frontrun/backrun) -> dict of field overrides,
-    or None to make that tx a 404."""
+_UNSET = object()
+
+
+def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, block=BLOCK,
+               miner=BUILDER_A, block_data=_UNSET, **overrides):
+    """Serve a genuine-looking sandwich for one triple (frontrun -> victim ->
+    backrun) plus its block. `overrides` maps role (victim/frontrun/backrun) ->
+    dict of field overrides, or None to make that tx a 404. `miner` is the
+    block's builder; `block_data` replaces the whole block payload (None = 404)."""
     roles = (("victim", txs[0], victim_sender, 42), ("frontrun", txs[1], bot, 41), ("backrun", txs[2], bot, 43))
     for role, h, sender, pos in roles:
         ov = overrides.get(role, {})
         if ov is None:
-            vm.mock_web(rf".*telemetry.*/{h}$", {"status": 404, "body": "not found"})
+            vm.mock_web(rf".*telemetry.*/transactions/{h}$", {"status": 404, "body": "not found"})
             continue
-        rec = tx_record(h, sender, pos)
+        rec = tx_record(h, sender, pos, block=block)
         rec.update(ov)
-        vm.mock_web(rf".*telemetry.*/{h}$", {"status": 200, "body": json.dumps(rec)})
+        vm.mock_web(rf".*telemetry.*/transactions/{h}$", {"status": 200, "body": json.dumps(rec)})
+    if block_data is None:
+        vm.mock_web(rf".*telemetry.*/blocks/{block}$", {"status": 404, "body": "not found"})
+    else:
+        body = {"height": block, "miner": {"hash": miner}} if block_data is _UNSET else block_data
+        vm.mock_web(rf".*telemetry.*/blocks/{block}$", {"status": 200, "body": json.dumps(body)})
 
 
-def mock_feeds(vm, victim=VICTIM, ref=None):
-    """Valid telemetry for the default triple and triple(1..20), plus the
+def mock_feeds(vm, victim=VICTIM, ref=None, miner=BUILDER_A, miners=None):
+    """Valid telemetry for the default triple and triple(1..20) (each in its own
+    block BLOCK+n so miners can differ: `miners` maps n -> builder), plus the
     reference price feed."""
-    for txs in [(TX_V, TX_F, TX_B)] + [triple(n) for n in range(1, 21)]:
-        mock_trace(vm, txs, victim_sender=victim)
+    mock_trace(vm, (TX_V, TX_F, TX_B), victim_sender=victim, miner=miner)
+    for n in range(1, 21):
+        mock_trace(vm, triple(n), victim_sender=victim, block=BLOCK + n, miner=(miners or {}).get(n, miner))
     vm.mock_web(r".*coinbase.*", {"status": 200, "body": json.dumps(ref or {"data": {"amount": "3100.00"}})})
 
 

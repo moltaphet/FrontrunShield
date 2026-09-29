@@ -3,47 +3,47 @@
   "chain_id": 61997,
   "rpc_url": "https://studio-next.genlayer.com/api",
   "explorer": "https://explorer-studio-next.genlayer.com",
-  "contract_address": "0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2",
-  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2",
+  "contract_address": "0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A",
+  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A",
   "deployer": "0xBEF843A77C675218228184EF13F22BF7BBC99A53",
-  "deploy_tx": "0xacab6500598f2bb989c30c7447f91aa3559b3f89e8666530dae6c528dbee888b",
-  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xacab6500598f2bb989c30c7447f91aa3559b3f89e8666530dae6c528dbee888b",
-  "deployed_at": "2026-09-29T19:09:17+00:00",
+  "deploy_tx": "0x9ea0b6995ebd0a94549d7f8b15267a98e026b4f5a887036d66f2a7cabea0ee72",
+  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x9ea0b6995ebd0a94549d7f8b15267a98e026b4f5a887036d66f2a7cabea0ee72",
+  "deployed_at": "2026-09-29T19:47:16+00:00",
   "source": "contracts/frontrun_shield.py",
-  "source_sha256": "cca6b07e477b0d4d46ecd3c5e9173e829227c60d4eb5c61a75dd3a269b794e72",
+  "source_sha256": "533090ba2edf82d75fb13d4186ab6fe3e6771c9535c951339727967d65040fba",
   "runner": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng",
   "fee_deposit_per_write_wei": "100000000000010352",
   "verification": {
     "method": "gen_getContractCode (base64) compared byte-for-byte with the local source",
     "onchain_source_matches": true,
-    "local_source_sha256": "cca6b07e477b0d4d46ecd3c5e9173e829227c60d4eb5c61a75dd3a269b794e72",
-    "checked_at": "2026-09-29T19:15:44+00:00"
+    "local_source_sha256": "533090ba2edf82d75fb13d4186ab6fe3e6771c9535c951339727967d65040fba",
+    "checked_at": "2026-09-29T19:55:42+00:00"
   },
   "seed": {
     "builders": {
       "Flashbots Alpha Relay": {
         "address": "0xdeabe6753ca5683ea8fe763d143053f17b5aae09",
         "bond_gen": 0.5,
-        "tx": "0xec642d959eaf4335a3578d4107ffd1f379493e56a69594b2e115804495c8b8f7",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xec642d959eaf4335a3578d4107ffd1f379493e56a69594b2e115804495c8b8f7"
+        "tx": "0xaf09d458c16ee18fc65f9a2fedef2d316bbf24790700e36397b8be3a49e6629b",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xaf09d458c16ee18fc65f9a2fedef2d316bbf24790700e36397b8be3a49e6629b"
       },
       "Titan Builder #04": {
-        "address": "0x6ea2ea94bd3b86fe2710dde2f8062721b838f22b",
+        "address": "0x396343362be2a4da1ce0c1c210945346fb82aa49",
         "bond_gen": 0.4,
-        "tx": "0xc3f66e8c6d62c2153badf283adea3fadd4412f4fa87dc95128c67a35507594b4",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xc3f66e8c6d62c2153badf283adea3fadd4412f4fa87dc95128c67a35507594b4"
+        "tx": "0x5b894f022b5d843196e1a874c80b3ffa55686d3b3838213f7503c4cf7f65f55f",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5b894f022b5d843196e1a874c80b3ffa55686d3b3838213f7503c4cf7f65f55f"
       },
       "BeaverBuild Relay": {
         "address": "0x830603da767a964d29e9977ba4dc063e7a978612",
         "bond_gen": 0.3,
-        "tx": "0x5d3955c3341e4355088fb46495bdb825e9b1c6f25043794d65258b0c37893c66",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5d3955c3341e4355088fb46495bdb825e9b1c6f25043794d65258b0c37893c66"
+        "tx": "0x92ccd00c2242015d9a12ec989a557d554507d14bf2c6d23218e5bf8d11eebb34",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x92ccd00c2242015d9a12ec989a557d554507d14bf2c6d23218e5bf8d11eebb34"
       },
       "Eden Sequencer": {
         "address": "0x4ab924b2a30f20e45a5231c632938502b93f5f7d",
         "bond_gen": 0.25,
-        "tx": "0xd4d8bf903853b74af396d44c15265555b40565bf0fa1c2fcc553d5177db08d75",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xd4d8bf903853b74af396d44c15265555b40565bf0fa1c2fcc553d5177db08d75"
+        "tx": "0x92e81089d84328fb9553ced9ef05712402a5d69fe77f94f8611d92cc858362d9",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x92e81089d84328fb9553ced9ef05712402a5d69fe77f94f8611d92cc858362d9"
       }
     },
     "bundles": {
@@ -53,8 +53,8 @@
         "victim_tx_hash": "0x44d09b1f74233d59d377444461784e862b593d8da080e5eef8c8adc860e6eb67",
         "frontrun_tx_hash": "0xa7dc6893a00ec5a279297ed3381a2fe0d260410f87e328c27a54b54b857b478f",
         "backrun_tx_hash": "0x93bea253871cd7439c99129d657e8fea1f8782e6e3e704314c6443ad806dbd61",
-        "tx": "0x97fdd31e90a8acfa9ed87297123eb93b9ccf7bbeb28feace5cad5f661b240e5f",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x97fdd31e90a8acfa9ed87297123eb93b9ccf7bbeb28feace5cad5f661b240e5f"
+        "tx": "0x11248867e6c24f747352bd0bfb3d3e9606b2b01944c2f90c96ad298c8475746c",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x11248867e6c24f747352bd0bfb3d3e9606b2b01944c2f90c96ad298c8475746c"
       },
       "fabricated-hashes": {
         "bundle_id": 2,
@@ -62,8 +62,8 @@
         "victim_tx_hash": "0x8682b97b8c9966903d8e04cb3f10561d648237990a611d8a14ba949f1bc68d26",
         "frontrun_tx_hash": "0x9bb7f9f37ff0b8aebe626257ce0d02a95197d9aab7ef65f8bd98f60ce5c83903",
         "backrun_tx_hash": "0x9482d1542b3b7cb06e62aa270ac98efb7bb6626a69a9a3ff239a498f773175e5",
-        "tx": "0xed27d21810fbc8087a460cdb2459cc72ce907ea420ba6b5e66200bea8f1a2b73",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xed27d21810fbc8087a460cdb2459cc72ce907ea420ba6b5e66200bea8f1a2b73"
+        "tx": "0x2bcdc6f6b8aeebe2d2958da64964d945f0d4cbef774bf8bfbf41ed0799e7adee",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x2bcdc6f6b8aeebe2d2958da64964d945f0d4cbef774bf8bfbf41ed0799e7adee"
       },
       "pending-review": {
         "bundle_id": 3,
@@ -71,8 +71,8 @@
         "victim_tx_hash": "0x2cbbdae064d3b55fc6db999a0086682947160cd12262acd6396a1cedbeb433e6",
         "frontrun_tx_hash": "0x89ccc29c558fb2194a32defe016f789e78cde4fbb7fc16c2963055d922d03f6f",
         "backrun_tx_hash": "0xf3ae56f9ecbd70e98cf0e862013ca202822477ca7c8cf98caaa7d378580985e3",
-        "tx": "0x0a6c7ee9fcd6841dbdf32731c57bc3cf972d4b9b5b43d8e17cc0c77ace487607",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x0a6c7ee9fcd6841dbdf32731c57bc3cf972d4b9b5b43d8e17cc0c77ace487607"
+        "tx": "0x6c2d6242e0dca4f2268ee4428607575390e77e620443eee07b1be1a77d8b19e7",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x6c2d6242e0dca4f2268ee4428607575390e77e620443eee07b1be1a77d8b19e7"
       }
     },
     "evaluations": {
@@ -81,13 +81,13 @@
         "bundle_status": "TOXIC",
         "classification": "TOXIC_SANDWICH",
         "is_toxic": true,
-        "confidence": 95,
+        "confidence": 87,
         "consensus_state": "MAJORITY_AGREE",
         "validator_votes": [
-          "idle",
-          "idle",
           "agree",
           "agree",
+          "idle",
+          "idle",
           "agree"
         ],
         "slashed_amount_wei": "200000000000000000",
@@ -95,10 +95,10 @@
         "reporter_bond_returned": true,
         "builder": "Titan Builder #04",
         "builder_status_after": "SLASHED",
-        "rationale": "The frontrun and backrun transactions bracket the victim in the same block, with the frontrun paying a significantly higher priority fee (30 gwei vs victim's 3 gwei). The bot's profit ($2500) closely matches the victim's loss ($1800), and the victim's slippage (150 bps) is near its limit, indicating forced price impact.",
-        "tx": "0x94bed37c4056b739a829bd7d2699d277839c35b1c503bfe0b1156c4762cb5d0e",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x94bed37c4056b739a829bd7d2699d277839c35b1c503bfe0b1156c4762cb5d0e",
-        "at": "2026-09-29T19:14:11+00:00"
+        "rationale": "The telemetry confirms a classic bracket pattern: frontrun tx (position 242) and backrun tx (position 245) share the same bot sender (0x396343362be2a4da1ce0c1c210945346fb82aa49) and surround the victim tx (position 243) within the same block 26084998, with the block builder address matching the accused bot  indicating builder-level ordering control. The victim's loss of $1,800 USD closely tracks the bot's extracted value of $2,500 USD, consistent with profit derived from forced price impact rather than a genuine cross-venue arbitrage gap, and the victim's 150 bps slippage tolerance was likely ",
+        "tx": "0x767406c7ad487b4d4f7027aa46fbaa008ca45b6d0af03f38619c266b5b602d60",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x767406c7ad487b4d4f7027aa46fbaa008ca45b6d0af03f38619c266b5b602d60",
+        "at": "2026-09-29T19:52:04+00:00"
       },
       "2": {
         "bundle_id": 2,
@@ -108,10 +108,10 @@
         "confidence": 0,
         "consensus_state": "MAJORITY_AGREE",
         "validator_votes": [
-          "agree",
-          "idle",
           "idle",
           "agree",
+          "agree",
+          "idle",
           "agree"
         ],
         "slashed_amount_wei": "0",
@@ -120,20 +120,20 @@
         "builder": "BeaverBuild Relay",
         "builder_status_after": "ACTIVE",
         "rationale": "Telemetry rejected: victim tx missing or not a verified transaction record. The report may be re-filed once verifiable evidence exists.",
-        "tx": "0xe67b3f521438b2ae09e4b90fb87c8b699905ff63551b23500463cb4488f567f5",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xe67b3f521438b2ae09e4b90fb87c8b699905ff63551b23500463cb4488f567f5",
-        "at": "2026-09-29T19:14:54+00:00"
+        "tx": "0xf6f8933270af0a2492b1b925267f60f4645d52d9ef0f513b98b75e01ad36ebc5",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xf6f8933270af0a2492b1b925267f60f4645d52d9ef0f513b98b75e01ad36ebc5",
+        "at": "2026-09-29T19:53:03+00:00"
       }
     },
     "reference_feed": {
       "url": "https://api.coinbase.com/v2/prices/ETH-USD/spot",
-      "tx": "0x6062ee4dbaecb6f2d8f604c5ab2550b6c32423075aa2fa9a60ed014eede7ad3b",
-      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x6062ee4dbaecb6f2d8f604c5ab2550b6c32423075aa2fa9a60ed014eede7ad3b"
+      "tx": "0x76678c9457c8c71a335bfc6ae1d6e2aa6062417db3de5d31d030eb702dcc4597",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x76678c9457c8c71a335bfc6ae1d6e2aa6062417db3de5d31d030eb702dcc4597"
     },
     "telemetry_gateway": {
-      "url": "https://eth.blockscout.com/api/v2/transactions",
-      "tx": "0x79a0f0076b72c923cdc15603621d51c3b239cee4914ccb43124657f3c0ec1230",
-      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x79a0f0076b72c923cdc15603621d51c3b239cee4914ccb43124657f3c0ec1230"
+      "url": "https://eth.blockscout.com/api/v2",
+      "tx": "0xf6601c5016b0290d9e1a3b71d5d79ee04fe4fc9ff2de0a4e703ba75239b4ee25",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xf6601c5016b0290d9e1a3b71d5d79ee04fe4fc9ff2de0a4e703ba75239b4ee25"
     }
   },
   "superseded": [
@@ -148,6 +148,12 @@
       "deploy_tx": "0xf0f36cbeaa710a589f24672bcda0ede3bac174cfb1dabe5507a3c4b86cc40cfc",
       "deployed_at": "2026-09-29T17:59:29+00:00",
       "source_sha256": "2e60fc1a84018aa1ea39ad987ecce0152bd66e4df3c0e318c2e333a27cd534fb"
+    },
+    {
+      "contract_address": "0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2",
+      "deploy_tx": "0xacab6500598f2bb989c30c7447f91aa3559b3f89e8666530dae6c528dbee888b",
+      "deployed_at": "2026-09-29T19:09:17+00:00",
+      "source_sha256": "cca6b07e477b0d4d46ecd3c5e9173e829227c60d4eb5c61a75dd3a269b794e72"
     }
   ]
 }

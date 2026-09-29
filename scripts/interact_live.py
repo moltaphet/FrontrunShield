@@ -16,7 +16,8 @@ telemetry URL: the contract derives each as `<gateway>/<tx_hash>`
 from the governor-set gateway, which `seed` configures.
 
 Telemetry: the gateway is Blockscout's transaction API, which answers 404 for unknown
-hashes. Bundle #1 uses a real mainnet triple (so it passes strict verification); #2 and
+hashes. Bundle #1 uses a real mainnet triple accused against that block's real miner (so it
+passes strict verification and builder attribution); #2 and
 #3 use fabricated hashes (the audit PoC) and resolve INCONCLUSIVE with a refunded bond.
 The slippage / profit / loss figures on bundle #1 are illustrative reporter claims.
 """
@@ -37,8 +38,18 @@ from common import (  # noqa: E402
 )
 
 REFERENCE_FEED = "https://api.coinbase.com/v2/prices/ETH-USD/spot"
-TELEMETRY_GATEWAY = "https://eth.blockscout.com/api/v2/transactions"  # 404s unknown txs
+TELEMETRY_GATEWAY = "https://eth.blockscout.com/api/v2"  # /transactions/<hash>, /blocks/<n>; 404s unknown
 REPORTER_BOND = GEN // 20  # 0.05 GEN, must accompany every submit_mempool_bundle
+
+# The builder accused in bundle #1 must be the block's real miner / fee recipient
+# (Blockscout: block 26084998 -> miner below), or attribution fails closed. The
+# other seeded builders keep synthetic keys.
+REAL_BUILDER_KEYS = {"Titan Builder #04": "0x396343362be2a4da1ce0c1c210945346fb82aa49"}
+
+
+def builder_key(name: str) -> str:
+    return REAL_BUILDER_KEYS.get(name) or synthetic_address(name)
+
 
 BUILDERS = [
     # name, bond (GEN)
@@ -139,7 +150,7 @@ def do_seed() -> None:
     # -- builders + bonds -----------------------------------------------------------
     have = {s["sequencer_address"]: s for s in read(client, account, addr, "get_all_sequencers")}
     for name, bond in BUILDERS:
-        key = synthetic_address(name)
+        key = builder_key(name)
         if key in have:
             log(f"Builder exists: {name} ({key})")
             rec["builders"].setdefault(name, {"address": key})
@@ -160,12 +171,12 @@ def do_seed() -> None:
             log(f"Bundle exists: #{bid} {spec['key']}")
             rec["bundles"].setdefault(spec["key"], {"bundle_id": bid})
             continue
-        builder_key = synthetic_address(spec["builder"])
+        bkey = builder_key(spec["builder"])
         log(f"Submitting bundle '{spec['key']}' against {spec['builder']} "
             f"(reporter bond {fmt_gen(REPORTER_BOND)}) ...")
         h, _ = send_write(
             client, account, addr, "submit_mempool_bundle",
-            [builder_key, spec["victim"], v, f, b, spec["pair"], spec["slippage_bps"],
+            [bkey, spec["victim"], v, f, b, spec["pair"], spec["slippage_bps"],
              spec["extracted_cents"], spec["loss_cents"], spec["priority_gwei"]],
             value=REPORTER_BOND,
             label=f"submit_mempool_bundle[{spec['key']}]",

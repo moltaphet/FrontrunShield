@@ -11,10 +11,10 @@ victim insurance pool, from which the victim can claim restitution.
 | | |
 |---|---|
 | Network | GenLayer Studio Next · chain `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
-| Contract | [`0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2`](https://explorer-studio-next.genlayer.com/address/0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2) |
+| Contract | [`0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A`](https://explorer-studio-next.genlayer.com/address/0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A) |
 | Source verified | On-chain source (`gen_getContractCode`) is byte-identical to `contracts/frontrun_shield.py` (sha256 in `deployments/studio-next.json`) |
-| Deploy tx | [`0xacab6500…888b`](https://explorer-studio-next.genlayer.com/transactions/0xacab6500598f2bb989c30c7447f91aa3559b3f89e8666530dae6c528dbee888b) (v3; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`, `0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`) |
-| **Live slashing tx** | [`0x94bed37c…5d0e`](https://explorer-studio-next.genlayer.com/transactions/0x94bed37c4056b739a829bd7d2699d277839c35b1c503bfe0b1156c4762cb5d0e) - real mainnet triple passed strict verification, `TOXIC_SANDWICH` (confidence 95), builder bond 0.4 → 0.2 GEN, reporter got bond + 0.02 GEN bounty |
+| Deploy tx | [`0x9ea0b699…ee72`](https://explorer-studio-next.genlayer.com/transactions/0x9ea0b6995ebd0a94549d7f8b15267a98e026b4f5a887036d66f2a7cabea0ee72) (v4; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`, `0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`, `0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2`) |
+| **Live slashing tx** | [`0x767406c7…2d60`](https://explorer-studio-next.genlayer.com/transactions/0x767406c7ad487b4d4f7027aa46fbaa008ca45b6d0af03f38619c266b5b602d60) - real mainnet triple, accused builder = the block's real miner, `TOXIC_SANDWICH` (confidence 87), bond 0.4 → 0.2 GEN, reporter bond returned + 0.02 GEN bounty |
 | Live audit-PoC tx | [`0xe67b3f52…67f5`](https://explorer-studio-next.genlayer.com/transactions/0xe67b3f521438b2ae09e4b90fb87c8b699905ff63551b23500463cb4488f567f5) - fabricated hashes, `INCONCLUSIVE` ("Telemetry rejected"), zero slash, reporter bond refunded |
 
 ## Why a smart contract can't do this (theory)
@@ -101,13 +101,17 @@ escrowed until the verdict.
 Only a committee ruling that the accusation was wrong costs the reporter anything.
 
 **2. Strict telemetry verification (no blind trust in HTTP 200).** Reporters cannot name a URL.
-Each tx is read from `<governor gateway>/<tx_hash>` and must be a structured transaction record:
+Each tx is read from `<governor gateway>/transactions/<tx_hash>` and must be a structured transaction record:
 * the record's **own `hash` field** equals the requested hash (an echo of the request URL, `{}`,
   HTML, a list, or a hash merely mentioned in text is rejected), with a sender, block and position;
 * all three in **one block**, ordered **frontrun < victim < backrun**, frontrun and backrun from
   the **same sender**, victim not the bot, no failed txs;
 * the **claimed victim must equal the victim tx's sender** (skipped only when no victim is named,
   which also means nobody can claim restitution).
+
+* **builder attribution**: the block is read from `<gateway>/blocks/<n>` and its `miner` /
+  `fee_recipient` / `builder` must equal the accused builder's key. A real sandwich cannot be
+  pinned on an unrelated bonded builder; unreadable block data fails closed.
 
 Any failure returns `INCONCLUSIVE` before the model is called, so a compromised or echo gateway
 cannot be talked into a slash. The prompt receives only the extracted, sanitised facts and
@@ -133,7 +137,7 @@ cooldown **and** with `pending_bundles == 0`, CEI with rollback. Only the builde
 
 ```
 contracts/frontrun_shield.py     GenVM intelligent contract
-tests/                           114 direct-mode tests (staking, consensus branches, slashing limits,
+tests/                           127 direct-mode tests (staking, consensus branches, slashing limits,
                                  restitution / re-entrancy, validator equivalence, reporter bonding,
                                  strict telemetry verification incl. the audit PoC, victim binding, bond
                                  refund, insurance surplus, replay recovery, builder unbonding)
@@ -149,7 +153,7 @@ frontend/src/data/guestData.ts   rich mock dataset for Guest Mode
 ```bash
 # Python (3.12; pins mirror the working GenLayer toolchain)
 uv venv --python 3.12 && uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt
-.venv/bin/python -m pytest tests -q                     # 114 passed
+.venv/bin/python -m pytest tests -q                     # 127 passed
 .venv/bin/genvm-lint check contracts/frontrun_shield.py
 
 # Deploy + seed (generates a git-ignored, mode-600 .env with a fresh key; funds it via sim_fundAccount)
@@ -185,33 +189,48 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 | Check | Result |
 |---|---|
-| `pytest tests` | 114 passed |
+| `pytest tests` | 127 passed |
 | `genvm-lint check` | passed |
 | `npm run lint` / `npm run build` | 0 errors (tsc strict + vite) |
 | `npm run check:headless` | 30/30: zero console errors on live load, all tabs, navbar single-line at 1280/1440/1920 px, wrong-network alert + switch, guest slashing flow, unstake cooldown, report form deposit notice / no telemetry input |
-| Live consensus | toxic → slashed, benign → cleared, restitution claimed (hashes above) |
+| Live consensus | real triple + matching block miner → slashed; fabricated hashes → `INCONCLUSIVE`, bond refunded (hashes above) |
+| Structural invariants | asserted after every step of the state-changing tests: bonds = Σ builder stakes; Σ slashed = `total_slashed`; `insurance_pool + restitution_paid + bounties_paid + surplus_allocated = total_slashed + bonds_forfeited`; `reporter_escrow` = 0.05 GEN × pending bundles; analyzed = toxic + benign + inconclusive |
+
+## Security & trust assumptions
+
+* **Single-key governor.** One key sets the reference feed and telemetry gateway and can call
+  `allocate_insurance_surplus`. It cannot touch builder bonds, reporter escrow or claimable victim
+  shares (allocation is capped at surplus), but it is a trusted role: it picks the evidence source.
+  Production would replace it with a multi-sig or DAO timelock so gateway changes and surplus
+  allocations are delayed, public and vetoable.
+* **The gateway is trusted for data.** Attribution and structure checks are only as honest as the
+  configured API (Blockscout here). Validators fetch it independently, but they all trust the same
+  endpoint; production should require agreement of two independent sources.
+* **Validators are LLMs.** Verdicts are probabilistic; guardrails (deterministic clamps,
+  verification before the model, bonds) bound the damage, not the error rate.
+* **Builder exit is bonded, not instant.** `request_builder_unstake()` starts a 3-day cooldown
+  during which the bond stays slashable and reporters can still file; `finalize_builder_unstake()`
+  releases it only after the cooldown and with zero pending bundles.
 
 ## Honest limitations
 
-* **Live evidence.** Bundle #1 uses a real Ethereum mainnet triple (block 26084998), so it
-  passes strict verification against Blockscout, but its slippage / profit / loss numbers are
-  illustrative reporter claims, and the tx endpoint carries no price-impact data: the verdict
-  rests on structure, fee ordering and those claims plus the Coinbase reference price.
-  Bundles #2 and #3 use fabricated hashes on purpose (the audit PoC). Real production use needs
-  a gateway with receipts / token transfers.
-* **Refunds make junk reports free** (gas / fee deposit aside): an unverifiable report locks the
-  builder's `pending_bundles` until someone calls evaluate. That was the trade-off chosen for fair
-  outage handling.
-* **Reporter-supplied numbers remain reporter-supplied.** A lying report is costly (bond forfeited)
-  but a report crafted to earn a *benign* verdict on a real attack would block re-filing.
-* **Unbonding is untested live end to end**: the seeded builders are synthetic keys nobody holds
-  and the cooldown is 3 days; it is covered by direct-mode tests with a warped clock.
-* **Governor is a single key** (gateway and reference feed).
-* **Validators are LLMs**: verdicts are probabilistic. Guardrails bound the damage, not the error rate.
-  Live votes showed 3 `agree` + 2 `idle` per round.
-* Seed victim of bundle #1 is the deployer, so the restitution path could be exercised; that claim
-  already drained the pool, so the live escrow KPI reads 0 with 0.2 GEN paid.
-* Builders are bonded via sponsorship (the deployer funded four synthetic builder addresses).
-  There is no bond-withdrawal path yet, and only 50%-of-remaining slashing (no appeals UI).
+* **Price-impact figures are simulated.** Bundle #1 is a real mainnet triple in a block built by
+  the accused address, but its slippage / profit / loss numbers are illustrative reporter
+  claims: Blockscout's transaction endpoint carries no receipts or pool prices, so the model judges
+  structure, fee ordering and those claims plus the Coinbase reference price - it does not measure
+  price impact. Bundles #2 and #3 use fabricated hashes on purpose (the audit PoC). Guest-mode data is
+  entirely synthetic. Production needs a gateway with swap receipts / token transfers.
+* **Metrics and settlement views iterate sequentially.** `get_protocol_metrics`,
+  `get_all_bundles` and the reserved-restitution scan loop over every bundle: O(n) per call. Fine at
+  demo scale; it needs an indexed / incrementally maintained counter before thousands of bundles.
+* **Refunds make junk reports cheap** (the fee deposit aside): an unverifiable report locks the
+  builder's `pending_bundles` until someone calls evaluate. That is the price of fair outage handling.
+* **Reporter-supplied numbers remain reporter-supplied.** A lying report that earns a *benign*
+  verdict on a real attack would block re-filing of that triple.
+* **Unbonding is not exercised live**: nobody holds the seeded builders' keys and the cooldown is
+  3 days; it is covered by direct-mode tests with a warped clock.
+* Seeded live victim of bundle #1 is a real third-party address, so no restitution claim was made
+  live; the claim path is covered by tests.
+* Slashing is 50% of the remaining bond; there is no appeals process.
 * Altering the contract requires a redeploy (new address); rerun `deploy.py --force`.
 * Test-network software with valueless tokens - not audited, not for real funds.

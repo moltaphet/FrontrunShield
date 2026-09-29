@@ -522,7 +522,7 @@ def test_full_lifecycle_metrics(world):
     toxic = submit(c, vm, bob, builder=BUILDER_A, txs=triple(1))
     benign = submit(c, vm, bob, builder=BUILDER_B, txs=triple(2), slippage=8, extracted=300_00, loss=0)
     pending = submit(c, vm, bob, builder=BUILDER_B, txs=triple(3))
-    mock_feeds(vm)
+    mock_feeds(vm, miners={2: BUILDER_B, 3: BUILDER_B})
     mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
     evaluate(c, vm, bob, toxic)
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
@@ -720,7 +720,7 @@ def test_telemetry_endpoint_is_derived_from_gateway_and_hashes(world):
     c, vm, alice, bob = world
     stake(c, vm, alice)
     bid = submit(c, vm, bob)
-    assert c.get_bundle(bid)["telemetry_urls"] == [f"{GATEWAY}/{h}" for h in (TX_V, TX_F, TX_B)]
+    assert c.get_bundle(bid)["telemetry_urls"] == [f"{GATEWAY}/transactions/{h}" for h in (TX_V, TX_F, TX_B)]
 
 
 def test_evaluator_fetches_only_the_derived_endpoints(world):
@@ -730,7 +730,8 @@ def test_evaluator_fetches_only_the_derived_endpoints(world):
     stake(c, vm, alice)
     bid = submit(c, vm, bob)
     for role, h, sender, pos in (("v", TX_V, VICTIM, 42), ("f", TX_F, BOT, 41), ("b", TX_B, BOT, 43)):
-        vm.mock_web(re.escape(f"{GATEWAY}/{h}"), {"status": 200, "body": __import__("json").dumps(tx_record(h, sender, pos))})
+        vm.mock_web(re.escape(f"{GATEWAY}/transactions/{h}"), {"status": 200, "body": __import__("json").dumps(tx_record(h, sender, pos))})
+    vm.mock_web(re.escape(f"{GATEWAY}/blocks/{BLOCK}"), {"status": 200, "body": __import__("json").dumps({"miner": {"hash": BUILDER_A}})})
     vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
     mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
     assert evaluate(c, vm, bob, bid) == "TOXIC_SANDWICH"
@@ -742,7 +743,7 @@ def test_governor_can_rotate_gateway_for_pending_bundles(world):
     bid = submit(c, vm, bob)
     vm.sender = vm.deployer
     c.set_telemetry_gateway("https://indexer.frontrunshield.example/v2")
-    assert c.get_bundle(bid)["telemetry_url"].startswith("https://indexer.frontrunshield.example/v2/")
+    assert c.get_bundle(bid)["telemetry_url"].startswith("https://indexer.frontrunshield.example/v2/transactions/")
 
 
 def test_gateway_is_governor_only(world):
@@ -878,7 +879,7 @@ def test_bundle_filed_during_cooldown_still_slashes_the_leaving_builder(world):
     vm.sender = alice
     c.request_builder_unstake()
     bid = submit(c, vm, bob, builder=key)  # reporters can still file mid-cooldown
-    mock_feeds(vm)
+    mock_feeds(vm, miner=key)
     mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
     evaluate(c, vm, bob, bid)
     warp_forward(vm, COOLDOWN + 1)
@@ -934,7 +935,7 @@ def echo_gateway(vm):
             body = {"args": {}, "data": "", "files": {}, "form": {}, "json": None, "method": "GET",
                     "headers": {"Host": "httpbin.org"}, "origin": "203.0.113.7",
                     "url": f"https://httpbin.org/anything/frontrunshield/trace/{h}"}
-            vm.mock_web(rf".*telemetry.*/{h}$", {"status": 200, "body": _json.dumps(body)})
+            vm.mock_web(rf".*telemetry.*/transactions/{h}$", {"status": 200, "body": _json.dumps(body)})
     install((TX_V, TX_F, TX_B))
 
 
@@ -1154,7 +1155,7 @@ def test_unclaimable_shares_unlock_immediately_or_after_the_window(world):
     stake(c, vm, alice, name="Titan Builder #04", builder=BUILDER_B, value=BOND)
     bid_b = submit(c, vm, bob, builder=BUILDER_B, victim=victim_key, txs=triple(2))
     vm._web_mocks.clear()  # first match wins: drop the earlier victim binding
-    mock_feeds(vm, victim=victim_key)
+    mock_feeds(vm, victim=victim_key, miners={2: BUILDER_B})
     mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
     assert evaluate(c, vm, bob, bid_b) == "TOXIC_SANDWICH"
     assert c.get_protocol_metrics()["allocatable_surplus"] == str(VICTIM_SHARE)  # only (a)
@@ -1169,3 +1170,99 @@ def test_unclaimable_shares_unlock_immediately_or_after_the_window(world):
     assert transferred(sent) == [2 * VICTIM_SHARE]
     assert c.get_protocol_metrics()["insurance_pool"] == "0"
     assert_invariants(c)
+
+
+# ============================================================ builder attribution (audit #3)
+def test_valid_sandwich_pinned_on_an_innocent_builder_is_inconclusive(world):
+    """A real, structurally perfect sandwich in a block built by BUILDER_A must not
+    slash BUILDER_B just because a reporter accused them."""
+    c, vm, alice, bob = world
+    stake(c, vm, alice, name="Guilty Builder", builder=BUILDER_A)
+    stake(c, vm, alice, name="Innocent Builder", builder=BUILDER_B)
+    bid = submit(c, vm, bob, builder=BUILDER_B)
+    mock_feeds(vm, miner=BUILDER_A)  # the block was built by A
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    sent = record_transfers(vm)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+    assert len(vm._llm_mocks_hit) == 0, "no model call on a misattributed report"
+    s = seq(c, BUILDER_B)
+    assert s["staked_amount"] == str(BOND) and s["total_slashed"] == "0" and s["slash_count"] == 0
+    assert s["status"] == "ACTIVE" and s["reputation_score"] == 80
+    assert seq(c, BUILDER_A)["staked_amount"] == str(BOND)  # nobody was slashed
+    assert transferred(sent) == [REPORTER_BOND]  # reporter refunded
+    assert "not the block's builder" in c.get_all_verdicts()[0]["forensic_rationale"]
+    assert c.get_protocol_metrics()["total_slashed"] == "0"
+    assert_invariants(c)
+
+
+def test_same_sandwich_against_the_real_block_builder_slashes(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice, name="Guilty Builder", builder=BUILDER_A)
+    stake(c, vm, alice, name="Innocent Builder", builder=BUILDER_B)
+    mock_feeds(vm, miner=BUILDER_A)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
+    assert evaluate(c, vm, bob, submit(c, vm, bob, builder=BUILDER_A)) == "TOXIC_SANDWICH"
+    assert seq(c, BUILDER_A)["status"] == "SLASHED" and seq(c, BUILDER_B)["status"] == "ACTIVE"
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"block_data": None},                                   # block endpoint 404s
+    {"block_data": {}},                                     # empty payload
+    {"block_data": {"miner": None}},
+    {"block_data": {"miner": "not-an-address"}},
+    {"block_data": {"miner": {"hash": "0x1234"}}},
+    {"block_data": [1, 2, 3]},                              # not an object
+])
+def test_unverifiable_block_data_fails_closed(world, kwargs):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_trace(vm, **kwargs)
+    vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    sent = record_transfers(vm)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+    assert seq(c, BUILDER_A)["staked_amount"] == str(BOND)
+    assert transferred(sent) == [REPORTER_BOND]
+    assert "block builder could not be verified" in c.get_all_verdicts()[0]["forensic_rationale"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"miner": BUILDER_A},                                   # plain string
+    {"fee_recipient": {"hash": BUILDER_A.upper().replace("0X", "0x")}},  # alias + checksum-ish case
+    {"builder": BUILDER_A},
+])
+def test_block_builder_field_variants_are_accepted(world, payload):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_trace(vm, block_data=payload)
+    vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
+    assert evaluate(c, vm, bob, bid) == "TOXIC_SANDWICH"
+
+
+def test_block_is_fetched_from_the_derived_block_endpoint(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_feeds(vm)
+    seen = []
+    orig = vm._match_web_mock
+    vm._match_web_mock = lambda url, method="GET": (seen.append(url), orig(url, method))[1]
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
+    evaluate(c, vm, bob, bid)
+    assert f"{GATEWAY}/blocks/{BLOCK}" in seen
+
+
+def test_prompt_states_the_verified_builder(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_feeds(vm)
+    seen = []
+    orig = vm._match_llm_mock
+    vm._match_llm_mock = lambda prompt: (seen.append(prompt), orig(prompt))[1]
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
+    evaluate(c, vm, bob, bid)
+    assert f"block builder (miner / fee recipient) {BUILDER_A} matches the accused builder" in seen[0]

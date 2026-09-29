@@ -66,7 +66,7 @@ export function ReportBundleForm() {
         </p>
       </div>
       <p className="mt-2 text-xs leading-snug text-slate-500">
-        Validators read each transaction from the protocol’s telemetry gateway and verify the payload: real records for all three hashes, one block, frontrun → victim → backrun order, one bot sender, and the victim address you name must be the victim tx’s sender. You can’t supply a URL.
+        Validators read each transaction from the protocol’s telemetry gateway and verify the payload: real records for all three hashes, one block, frontrun → victim → backrun order, one bot sender, the victim address you name must be the victim tx’s sender, and the accused builder must be the block’s miner / fee recipient. You can’t supply a URL.
       </p>
 
       <label className={label} htmlFor="r-builder">Accused builder</label>

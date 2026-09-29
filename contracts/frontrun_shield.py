@@ -29,6 +29,10 @@
 #     frontrun and backrun must share a sender, and the reported victim must be
 #     the victim tx's sender. Echo services, empty bodies and fabricated hashes
 #     fail these checks and short-circuit to INCONCLUSIVE before any model call.
+#   * Builder attribution. The block itself is read from `<gateway>/blocks/<n>`
+#     and its miner / fee recipient must equal the accused builder, so a real
+#     sandwich cannot be pinned on an unrelated bonded builder. Fail-closed:
+#     unreadable block data or a mismatch is INCONCLUSIVE (bond refunded).
 #   * Insurance pool. Forfeited bonds and lapsed / unclaimable victim shares
 #     are "surplus" the governor can allocate; shares still claimable by a
 #     named victim are reserved and can never be touched.
@@ -171,10 +175,29 @@ def _fetch_feed(url: str) -> dict:
 
 def _telemetry_url(base: str, tx_hash: str) -> str:
     """Per-tx evidence endpoint derived only from the governor-verified gateway
-    and a regex-validated tx hash. No reporter-controlled string reaches it."""
+    (an API root such as `.../api/v2`) and a regex-validated tx hash. No
+    reporter-controlled string reaches it."""
     if base == "":
         return ""
-    return f"{base.rstrip('/')}/{tx_hash}"
+    return f"{base.rstrip('/')}/transactions/{tx_hash}"
+
+
+def _block_url(base: str, block: int) -> str:
+    if base == "":
+        return ""
+    return f"{base.rstrip('/')}/blocks/{int(block)}"
+
+
+def _block_builder(obj) -> str:
+    """The address that built / received fees for a block (Blockscout `miner`,
+    or `fee_recipient` / `builder`), or "" when absent or malformed."""
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("miner", "fee_recipient", "builder"):
+        addr = _addr_of(obj.get(key))
+        if addr != "":
+            return addr
+    return ""
 
 
 def _fetch_json(url: str):
@@ -251,6 +274,16 @@ def _tx_fields(obj, want_hash: str):
         "gas_gwei": (gas_price // 10**9) if gas_price is not None and gas_price >= 0 else -1,
         "method": _sanitize(obj.get("method", ""), 40),
     }
+
+
+def _verify_builder(block_obj, builder_hex: str):
+    """Fail-closed builder attribution. Returns (ok, reason, fact)."""
+    miner = _block_builder(block_obj)
+    if miner == "":
+        return False, "block builder could not be verified from block data", ""
+    if miner != builder_hex:
+        return False, "accused builder is not the block's builder", ""
+    return True, "", f"block builder (miner / fee recipient) {miner} matches the accused builder"
 
 
 def _verify_trace(txs: list, victim_hex: str):
@@ -727,6 +760,7 @@ class FrontrunShield(gl.contract.Contract):
                 "priority_gwei": int(b.frontrun_priority_gwei),
                 "extracted_cents": int(b.bot_extracted_value_usd_cents),
                 "victim_hex": b.victim_hex,
+                "builder_hex": b.builder_hex,
             },
             self.telemetry_gateway,
             self.reference_feed_url,
@@ -817,6 +851,10 @@ class FrontrunShield(gl.contract.Contract):
                 obj = _fetch_json(_telemetry_url(gateway_url, h))
                 records.append(_tx_fields(obj, h) if obj is not None else None)
             ok, reason, facts = _verify_trace(records, ctx["victim_hex"])
+            if ok:
+                block_obj = _fetch_json(_block_url(gateway_url, records[0]["block"]))
+                ok, reason, fact = _verify_builder(block_obj, ctx["builder_hex"])
+                facts += "\n" + fact
             if not ok:
                 # Unverifiable evidence: never call the model, never slash.
                 return {
@@ -919,10 +957,10 @@ class FrontrunShield(gl.contract.Contract):
 
     @gl.public.write
     def set_telemetry_gateway(self, url: str) -> None:
-        """Governor-verified base URL of a structured transaction API (e.g. a
-        Blockscout `/api/v2/transactions`). Each bundle tx is read from
-        `<base>/<tx_hash>`; a 404 or a payload whose own `hash` differs fails
-        verification."""
+        """Governor-verified API root (e.g. Blockscout `/api/v2`). Each bundle tx
+        is read from `<base>/transactions/<tx_hash>` and its block from
+        `<base>/blocks/<n>`; a 404, a payload whose own `hash` differs, or a
+        block builder that is not the accused builder fails verification."""
         if gl.message.sender_address != self.governor:
             raise gl.vm.UserError(f"{ERR_EXPECTED} governor only")
         clean = url.strip()
