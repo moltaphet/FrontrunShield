@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    @apply bg-ink-950 text-slate-200 font-sans antialiased;
+    background-image:
+      radial-gradient(1000px 500px at 85% -10%, rgba(34,184,240,.07), transparent 60%),
+      radial-gradient(900px 500px at 0% -5%, rgba(16,201,138,.07), transparent 60%);
+    background-attachment: fixed;
+  }
+  ::selection { background: rgba(52,224,161,.3); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #1c2533; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+@layer components {
+  .card { @apply rounded-xl border border-ink-700 bg-ink-900/80 backdrop-blur-sm; }
+  .card-title { @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400 whitespace-nowrap; }
+  .btn { @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply btn bg-shield-500 text-ink-950 hover:bg-shield-400; }
+  .btn-danger { @apply btn bg-toxic-500 text-white hover:bg-toxic-400; }
+  .btn-ghost { @apply btn border border-ink-600 bg-ink-800/60 text-slate-200 hover:border-ink-500 hover:bg-ink-700; }
+  .badge { @apply inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide; }
+  .input { @apply w-full rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-shield-500; }
+  .mono { @apply font-mono; }
+  .flow-line {
+    background-image: repeating-linear-gradient(90deg, currentColor 0 8px, transparent 8px 16px);
+    background-size: 24px 2px; background-repeat: repeat-x; height: 2px;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}
