@@ -11,6 +11,7 @@ const BUN: Record<BundleStatus, string> = {
   TOXIC: 'border-toxic-600 bg-toxic-600/15 text-toxic-400',
   BENIGN: 'border-shield-600 bg-shield-600/15 text-shield-400',
   INCONCLUSIVE: 'border-ink-500 bg-ink-800 text-slate-300',
+  FORGED: 'border-toxic-600 bg-toxic-600/15 text-toxic-400',
 }
 
 export function SequencerBadge({ status }: { status: SequencerStatus }) {

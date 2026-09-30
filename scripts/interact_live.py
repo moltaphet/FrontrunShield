@@ -19,7 +19,7 @@ Telemetry: the gateway is Blockscout's transaction API, which answers 404 for un
 hashes. Bundle #1 uses a real mainnet triple accused against that block's real miner (so it
 passes strict verification and builder attribution); #2 and
 #3 use fabricated hashes (the audit PoC) and resolve INCONCLUSIVE with a refunded bond.
-The slippage / profit / loss figures on bundle #1 are illustrative reporter claims.
+Bundle #1 has no bot swap logs, so independent derivation fails closed to INCONCLUSIVE (bond refunded): its figures are unverifiable reporter claims.
 """
 
 from __future__ import annotations

@@ -29,6 +29,20 @@
 #     frontrun and backrun must share a sender, and the reported victim must be
 #     the victim tx's sender. Echo services, empty bodies and fabricated hashes
 #     fail these checks and short-circuit to INCONCLUSIVE before any model call.
+#   * Independent derivation. Reporter-supplied pair, slippage, extracted value,
+#     victim loss and priority fee are CLAIMS, never inputs. Each validator reads
+#     the three txs' token-transfer logs and gas fields from the gateway and
+#     derives the pool, victim slippage, victim loss, bot profit (priced with the
+#     gateway's per-token rates) and frontrun priority fee itself. A claim that
+#     deviates >DEVIATION_PCT% from the derived value is a FORGED_CLAIM: the
+#     bond is forfeited, nothing is slashed, and the model is never consulted.
+#     The model only ever sees derived figures. Missing / unpriceable logs fail
+#     closed to INCONCLUSIVE (bond refunded), never to a slash.
+#   * Exact-label consensus. Validators also re-derive the metrics and must agree
+#     on them and on the exact classification. TOXIC_SANDWICH and BENIGN_ARBITRAGE
+#     are endorsed only on an exact label match; INCONCLUSIVE is the fail-closed
+#     fallback, so a BENIGN / INCONCLUSIVE split settles INCONCLUSIVE (no bounty,
+#     bond refunded). (TOXIC_SANDWICH is the "predatory sandwich" class.)
 #   * Builder attribution. The block itself is read from `<gateway>/blocks/<n>`
 #     and its miner / fee recipient must equal the accused builder, so a real
 #     sandwich cannot be pinned on an unrelated bonded builder. Fail-closed:
@@ -76,6 +90,7 @@ BUNDLE_PENDING = "PENDING"
 BUNDLE_TOXIC = "TOXIC"
 BUNDLE_BENIGN = "BENIGN"
 BUNDLE_INCONCLUSIVE = "INCONCLUSIVE"  # no verdict either way; may be re-reported
+BUNDLE_FORGED = "FORGED"  # reporter claims contradicted by derived telemetry; may be re-filed honestly
 
 CONSENSUS_AGREE = "MAJORITY_AGREE"
 
@@ -96,6 +111,11 @@ REP_START = 80
 REP_MAX = 100
 REP_SLASH_PENALTY = 30
 REP_CLEAR_BONUS = 5
+DEVIATION_PCT = 5            # max tolerated reporter-claim deviation from derived facts
+VALIDATOR_DRIFT_PCT = 2      # max drift between validators' derived metrics (price feeds tick)
+FLOOR_CENTS = 100            # absolute slack on USD figures (rounding)
+FLOOR_BPS = 1
+FLOOR_GWEI = 1
 MAX_TELEMETRY_CHARS = 2500
 MAX_RATIONALE_CHARS = 600
 
@@ -265,6 +285,16 @@ def _tx_fields(obj, want_hash: str):
     if status in ("error", "failed", "fail", "reverted", "0"):
         return None
     gas_price = _int_of(obj.get("gas_price"))
+    base_fee = _int_of(obj.get("base_fee_per_gas"))
+    max_prio = _int_of(obj.get("max_priority_fee_per_gas"))
+    if gas_price is not None and base_fee is not None and gas_price >= base_fee:
+        prio = gas_price - base_fee  # effective tip actually paid per gas
+        if max_prio is not None and max_prio < prio:
+            prio = max_prio
+    elif max_prio is not None:
+        prio = max_prio
+    else:
+        prio = -1
     return {
         "hash": want_hash,
         "sender": sender,
@@ -273,7 +303,129 @@ def _tx_fields(obj, want_hash: str):
         "position": pos,
         "gas_gwei": (gas_price // 10**9) if gas_price is not None and gas_price >= 0 else -1,
         "method": _sanitize(obj.get("method", ""), 40),
+        "prio_gwei": (prio // 10**9) if prio >= 0 else -1,
     }
+
+
+def _transfers_url(base: str, tx_hash: str) -> str:
+    if base == "":
+        return ""
+    return f"{base.rstrip('/')}/transactions/{tx_hash}/token-transfers"
+
+
+def _rate_parts(v):
+    """Decimal string -> (mantissa, scale) using integers only, or None."""
+    s = str(v).strip() if v is not None else ""
+    if not re.match(r"^[0-9]+(\.[0-9]+)?$", s):
+        return None
+    whole, _, frac = s.partition(".")
+    return int(whole + frac), 10 ** len(frac)
+
+
+def _parse_transfers(obj):
+    """Token-transfer list of a tx -> [{from,to,symbol,cents}], or None when the
+    payload is malformed, paginated (incomplete) or any transfer cannot be priced
+    (fail closed: an unpriced leg would hide value)."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("items"), list):
+        return None
+    if obj.get("next_page_params"):
+        return None
+    out = []
+    for it in obj["items"]:
+        if not isinstance(it, dict) or not isinstance(it.get("token"), dict):
+            return None
+        tok = it["token"]
+        total = it.get("total") if isinstance(it.get("total"), dict) else {}
+        value = _int_of(total.get("value"))
+        dec = _int_of(total.get("decimals", tok.get("decimals")))
+        rate = _rate_parts(tok.get("exchange_rate"))
+        frm, to = _addr_of(it.get("from")), _addr_of(it.get("to"))
+        if value is None or value < 0 or dec is None or not 0 <= dec <= 36 or rate is None or frm == "" or to == "":
+            return None
+        mant, scale = rate
+        out.append({
+            "from": frm, "to": to,
+            "symbol": _sanitize(tok.get("symbol", ""), 16).upper(),
+            "cents": value * mant * 100 // (10 ** dec * scale),
+        })
+    return out
+
+
+def _derive(records: list, transfers: list):
+    """records / transfers are [victim, frontrun, backrun]. Returns
+    (ok, reason, derived). Everything is computed from the evidence: the pool is
+    the victim's counterparty, the victim's loss is value in minus value out, the
+    bot's extraction is its net priced flow across both legs."""
+    v, f, b = records
+    tv, tf, tb = transfers
+    bot, victim = f["sender"], v["sender"]
+    sent = [t for t in tv if t["from"] == victim]
+    got = [t for t in tv if t["to"] == victim]
+    if not sent or not got:
+        return False, "victim tx has no swap transfers in and out", None
+    pool = sent[0]["to"]
+    if any(t["to"] != pool for t in sent) or any(t["from"] != pool for t in got):
+        return False, "victim swap does not go through a single pool", None
+    for lab, tl in (("frontrun", tf), ("backrun", tb)):
+        if not any(t["from"] == bot and t["to"] == pool for t in tl) or \
+           not any(t["to"] == bot and t["from"] == pool for t in tl):
+            return False, f"{lab} does not trade against the victim's pool", None
+    usd_in = sum(t["cents"] for t in sent)
+    usd_out = sum(t["cents"] for t in got)
+    if usd_in <= 0:
+        return False, "victim swap has no priced value", None
+    loss = usd_in - usd_out if usd_in > usd_out else 0
+    bot_in = sum(t["cents"] for tl in (tf, tb) for t in tl if t["to"] == bot)
+    bot_out = sum(t["cents"] for tl in (tf, tb) for t in tl if t["from"] == bot)
+    if f["prio_gwei"] < 0:
+        return False, "frontrun priority fee could not be derived", None
+    syms = sorted({t["symbol"] for t in sent + got})
+    return True, "", {
+        "pair": "/".join(syms), "pool": pool, "victim_in_cents": usd_in,
+        "slippage_bps": loss * BPS // usd_in, "loss_cents": loss,
+        "extracted_cents": bot_in - bot_out if bot_in > bot_out else 0,
+        "priority_gwei": f["prio_gwei"],
+    }
+
+
+def _deviates(claim: int, derived: int, floor: int) -> bool:
+    d = abs(claim - derived)
+    return d > floor and d * 100 > DEVIATION_PCT * max(claim, derived)
+
+
+def _forged_fields(ctx: dict, d: dict) -> list:
+    """Names of reporter claims contradicted by the derived facts."""
+    bad = []
+    claim_pair = str(ctx["dex_pair"]).upper()
+    if any(sym not in claim_pair for sym in d["pair"].split("/")):
+        bad.append("pair")
+    for name, claim, key, floor in (
+        ("slippage", ctx["slippage_bps"], "slippage_bps", FLOOR_BPS),
+        ("extracted value", ctx["extracted_cents"], "extracted_cents", FLOOR_CENTS),
+        ("victim loss", ctx["loss_cents"], "loss_cents", FLOOR_CENTS),
+        ("priority fee", ctx["priority_gwei"], "priority_gwei", FLOOR_GWEI),
+    ):
+        if _deviates(int(claim), int(d[key]), floor):
+            bad.append(name)
+    return bad
+
+
+def _metrics_agree(a, b) -> bool:
+    """Validators must derive the same facts; USD figures may drift by
+    VALIDATOR_DRIFT_PCT because the gateway's token rates tick."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    if a.get("pair") != b.get("pair") or a.get("pool") != b.get("pool"):
+        return False
+    for key, floor in (("slippage_bps", FLOOR_BPS), ("extracted_cents", FLOOR_CENTS),
+                       ("loss_cents", FLOOR_CENTS), ("priority_gwei", FLOOR_GWEI)):
+        x, y = _int_of(a.get(key)), _int_of(b.get(key))
+        if x is None or y is None:
+            return False
+        dd = abs(x - y)
+        if dd > floor and dd * 100 > VALIDATOR_DRIFT_PCT * max(x, y):
+            return False
+    return True
 
 
 def _verify_builder(block_obj, builder_hex: str):
@@ -318,7 +470,7 @@ def _cents_to_usd(cents: int) -> str:
     return f"{int(cents) // 100}.{int(cents) % 100:02d}"
 
 
-def _build_prompt(ctx: dict, facts: str, reference: dict) -> str:
+def _build_prompt(ctx: dict, facts: str, reference: dict, d: dict) -> str:
     reference_txt = reference["text"] if reference["reachable"] else "UNAVAILABLE"
     return f"""You are an MEV forensic analyst on a decentralized validator committee.
 Decide whether the transaction bundle below is a TOXIC SANDWICH ATTACK or a
@@ -338,15 +490,19 @@ profit comes from a genuine cross-venue price gap, and victim loss is
 negligible. Ordering next to a victim by coincidence is not an attack.
 INCONCLUSIVE: evidence too thin to call. Treat as not toxic.
 
-=== 2. BUNDLE TRACE (submitted on-chain) ===
-dex_pair: <untrusted_pair>{ctx["dex_pair"]}</untrusted_pair>
+=== 2. BUNDLE TRACE (derived by the contract from transaction receipts) ===
+The reporter's own claims were checked against these figures and lie within
+tolerance; only the derived figures below are evidence.
 victim_tx: {ctx["victim_tx"]}
 frontrun_tx: {ctx["frontrun_tx"]}
 backrun_tx: {ctx["backrun_tx"]}
-victim_slippage_bps: {ctx["slippage_bps"]}
-bot_extracted_value_usd: {ctx["extracted_usd"]}
-victim_loss_usd: {ctx["loss_usd"]}
-frontrun_priority_fee_gwei: {ctx["priority_gwei"]}
+pool: {d["pool"]}
+token_pair: {d["pair"]}
+victim_swap_value_usd: {_cents_to_usd(d["victim_in_cents"])}
+victim_slippage_bps: {d["slippage_bps"]}
+bot_extracted_value_usd: {_cents_to_usd(d["extracted_cents"])}
+victim_loss_usd: {_cents_to_usd(d["loss_cents"])}
+frontrun_priority_fee_gwei: {d["priority_gwei"]}
 
 === 3. VERIFIED ON-CHAIN TELEMETRY (structural checks already passed) ===
 Verify that the telemetry contains authentic swap receipts for the target bundle. If
@@ -365,11 +521,16 @@ Reply with ONE JSON object and nothing else:
   "rationale": "<two or three sentences citing concrete evidence>"}}"""
 
 
-def _parse_verdict(raw, slippage_bps: int, extracted_cents: int) -> dict:
+def _parse_verdict(raw, derived: dict) -> dict:
     """Coerce whatever the model returned into a verdict, then clamp it with
     deterministic ground truth: an ordering that extracted nothing, or that
     moved the victim by less than MIN_TOXIC_SLIPPAGE_BPS, cannot be toxic, and
-    a low-confidence accusation is not enough to confiscate a bond."""
+    a low-confidence accusation is not enough to confiscate a bond. The clamp
+    reads only DERIVED metrics; a toxic label needs extraction, victim loss and
+    meaningful slippage all present in the evidence."""
+    slippage_bps = int(derived["slippage_bps"])
+    extracted_cents = int(derived["extracted_cents"])
+    loss_cents = int(derived["loss_cents"])
     if isinstance(raw, str):
         try:
             first, last = raw.find("{"), raw.rfind("}")
@@ -409,11 +570,11 @@ def _parse_verdict(raw, slippage_bps: int, extracted_cents: int) -> dict:
         raise gl.vm.UserError(f"{ERR_LLM} empty rationale")
 
     toxic = flag
-    if toxic and (extracted_cents == 0 or slippage_bps < MIN_TOXIC_SLIPPAGE_BPS):
+    if toxic and (extracted_cents == 0 or loss_cents == 0 or slippage_bps < MIN_TOXIC_SLIPPAGE_BPS):
         toxic = False
         cls = "INCONCLUSIVE"
-        rationale = ("Deterministic clamp: no extracted value or negligible victim "
-                     "slippage - cannot be toxic. " + rationale)[:MAX_RATIONALE_CHARS]
+        rationale = ("Deterministic clamp: no extracted value, no victim loss or "
+                     "negligible slippage in the derived telemetry - cannot be toxic. " + rationale)[:MAX_RATIONALE_CHARS]
     if toxic and conf < MIN_TOXIC_CONFIDENCE:
         toxic = False
         cls = "INCONCLUSIVE"
@@ -489,6 +650,11 @@ class Verdict:
     reporter_bounty: u256
     reporter_bond_returned: bool
     timestamp: u256
+    derived_pair: str
+    derived_slippage_bps: u256
+    derived_extracted_cents: u256
+    derived_loss_cents: u256
+    derived_priority_gwei: u256
 
 
 class FrontrunShield(gl.contract.Contract):
@@ -533,12 +699,15 @@ class FrontrunShield(gl.contract.Contract):
     def get_protocol_metrics(self) -> dict:
         toxic = 0
         inconclusive = 0
+        forged = 0
         for i in range(1, int(self.next_bundle_id)):
             st = self.bundles[u256(i)].status
             if st == BUNDLE_TOXIC:
                 toxic += 1
             elif st == BUNDLE_INCONCLUSIVE:
                 inconclusive += 1
+            elif st == BUNDLE_FORGED:
+                forged += 1
         return {
             "total_slashed": str(self.total_slashed),
             "active_bonds": str(self.total_bonded),
@@ -547,7 +716,8 @@ class FrontrunShield(gl.contract.Contract):
             "bundles_analyzed": int(self.bundles_analyzed),
             "bundles_total": int(self.next_bundle_id) - 1,
             "toxic_count": toxic,
-            "benign_count": int(self.bundles_analyzed) - toxic - inconclusive,
+            "benign_count": int(self.bundles_analyzed) - toxic - inconclusive - forged,
+            "forged_count": forged,
             "inconclusive_count": inconclusive,
             "reporter_escrow": str(self.reporter_escrow),
             "bonds_forfeited": str(self.bonds_forfeited),
@@ -669,7 +839,10 @@ class FrontrunShield(gl.contract.Contract):
         victim_loss_usd_cents: u256,
         frontrun_priority_gwei: u256,
     ) -> u256:
-        """Register a suspect bundle trace against a bonded builder. The call
+        """Register a suspect bundle trace against a bonded builder. The economic
+        arguments (pair, slippage, extracted value, victim loss, priority fee) are
+        CLAIMS only: validators re-derive each from the tx receipts and a deviation
+        above DEVIATION_PCT% forfeits the bond. The call
         must carry exactly REPORTER_BOND, escrowed until the verdict: returned
         (plus a bounty) if the bundle is adjudicated TOXIC, forfeited to the
         insurance pool otherwise. Amounts are USD cents (integers) so no float
@@ -703,11 +876,12 @@ class FrontrunShield(gl.contract.Contract):
 
         # Replay guard. A bundle with a live or final verdict cannot be filed
         # again, but an INCONCLUSIVE one (evidence missing / unverifiable) can,
-        # so a junk report cannot permanently censor a real attack.
+        # so a junk report cannot permanently censor a real attack. A FORGED one
+        # (claims contradicted by the receipts) can be re-filed with honest numbers.
         replay_key = "|".join(hashes)
         if replay_key in self.seen_bundles:
             prior = self.bundles[self.seen_bundles[replay_key]]
-            if prior.status != BUNDLE_INCONCLUSIVE:
+            if prior.status not in (BUNDLE_INCONCLUSIVE, BUNDLE_FORGED):
                 raise gl.vm.UserError(f"{ERR_EXPECTED} bundle already submitted")
 
         bid = self.next_bundle_id
@@ -755,8 +929,7 @@ class FrontrunShield(gl.contract.Contract):
                 "frontrun_tx": b.frontrun_tx_hash,
                 "backrun_tx": b.backrun_tx_hash,
                 "slippage_bps": int(b.victim_slippage_bps),
-                "extracted_usd": _cents_to_usd(int(b.bot_extracted_value_usd_cents)),
-                "loss_usd": _cents_to_usd(int(b.victim_loss_usd_cents)),
+                "loss_cents": int(b.victim_loss_usd_cents),
                 "priority_gwei": int(b.frontrun_priority_gwei),
                 "extracted_cents": int(b.bot_extracted_value_usd_cents),
                 "victim_hex": b.victim_hex,
@@ -790,6 +963,12 @@ class FrontrunShield(gl.contract.Contract):
             self.bounties_paid += bounty
             b.status = BUNDLE_TOXIC
             payout = bond + bounty
+        elif result["classification"] == "FORGED_CLAIM":
+            # Reporter claims contradicted by the derived receipts: fail closed.
+            # The bond is forfeited, the builder is neither slashed nor cleared.
+            self.insurance_pool += bond
+            self.bonds_forfeited += bond
+            b.status = BUNDLE_FORGED
         elif result["classification"] == "INCONCLUSIVE":
             # Evidence missing / unverifiable / model shrug: nobody is punished.
             # The reporter gets the bond back and may re-file.
@@ -821,6 +1000,11 @@ class FrontrunShield(gl.contract.Contract):
             reporter_bounty=bounty,
             reporter_bond_returned=payout > 0,
             timestamp=self._now(),
+            derived_pair=result["derived"]["pair"],
+            derived_slippage_bps=int(result["derived"]["slippage_bps"]),
+            derived_extracted_cents=int(result["derived"]["extracted_cents"]),
+            derived_loss_cents=int(result["derived"]["loss_cents"]),
+            derived_priority_gwei=int(result["derived"]["priority_gwei"]),
         )
         b.verdict_id = vid
         self.bundles[bundle_id] = b
@@ -838,11 +1022,20 @@ class FrontrunShield(gl.contract.Contract):
 
     def _adjudicate(self, ctx: dict, gateway_url: str, reference_url: str) -> dict:
         """Leader/validator round. Closures capture plain locals only - never
-        `self`. Validators re-run the whole forensic pipeline (fresh telemetry,
-        fresh model call) and agree iff the verdict flag matches and the
-        confidence sits inside the tolerance band."""
-        slippage = int(ctx["slippage_bps"])
-        extracted = int(ctx["extracted_cents"])
+        `self`. Every validator re-runs the whole pipeline: fresh telemetry, its
+        own derivation of the economic facts, its own claim check and model call.
+        They endorse a leader only on identical derived metrics and an identical
+        label; the one asymmetry is INCONCLUSIVE, the fail-closed fallback."""
+        empty = {"pair": "", "pool": "", "victim_in_cents": 0, "slippage_bps": 0,
+                 "loss_cents": 0, "extracted_cents": 0, "priority_gwei": 0}
+
+        def inconclusive(reason: str) -> dict:
+            return {
+                "is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
+                "rationale": _sanitize(f"Telemetry rejected: {reason}. The report may be "
+                                       "re-filed once verifiable evidence exists.", MAX_RATIONALE_CHARS),
+                "telemetry_ok": False, "derived": empty,
+            }
 
         def leader_fn() -> dict:
             hashes = (ctx["victim_tx"], ctx["frontrun_tx"], ctx["backrun_tx"])
@@ -857,22 +1050,42 @@ class FrontrunShield(gl.contract.Contract):
                 facts += "\n" + fact
             if not ok:
                 # Unverifiable evidence: never call the model, never slash.
+                return inconclusive(reason)
+
+            # Independent derivation from the receipts' token-transfer logs.
+            transfers = [_parse_transfers(_fetch_json(_transfers_url(gateway_url, h))) for h in hashes]
+            if any(t is None for t in transfers):
+                return inconclusive("token-transfer logs missing, incomplete or unpriced")
+            ok, reason, derived = _derive(records, transfers)
+            if not ok:
+                return inconclusive(reason)
+            forged = _forged_fields(ctx, derived)
+            if forged:
                 return {
-                    "is_toxic": False, "confidence": 0, "classification": "INCONCLUSIVE",
-                    "rationale": _sanitize(f"Telemetry rejected: {reason}. The report may be "
-                                           "re-filed once verifiable evidence exists.", MAX_RATIONALE_CHARS),
-                    "telemetry_ok": False,
+                    "is_toxic": False, "confidence": 100, "classification": "FORGED_CLAIM",
+                    "rationale": _sanitize(
+                        "Reporter claims contradict the transaction receipts (>"
+                        f"{DEVIATION_PCT}% deviation): {', '.join(forged)}. Derived pair {derived['pair']}, "
+                        f"slippage {derived['slippage_bps']} bps, extracted USD "
+                        f"{_cents_to_usd(derived['extracted_cents'])}, victim loss USD "
+                        f"{_cents_to_usd(derived['loss_cents'])}, priority fee {derived['priority_gwei']} gwei.",
+                        MAX_RATIONALE_CHARS),
+                    "telemetry_ok": True, "derived": derived,
                 }
+
+            facts += (f"\nderived from logs: pool {derived['pool']} pair {derived['pair']} "
+                      f"victim_loss_cents {derived['loss_cents']} bot_profit_cents {derived['extracted_cents']}")
             reference = _fetch_feed(reference_url)
-            prompt = _build_prompt(ctx, facts, reference)
+            prompt = _build_prompt(ctx, facts, reference, derived)
             try:
                 raw = gl.nondet.exec_prompt(prompt, response_format="json")
             except gl.vm.UserError:
                 raise
             except Exception:
                 raise gl.vm.UserError(f"{ERR_LLM} model call failed")
-            verdict = _parse_verdict(raw, slippage, extracted)
+            verdict = _parse_verdict(raw, derived)
             verdict["telemetry_ok"] = True
+            verdict["derived"] = derived
             return verdict
 
         def validator_fn(leaders_res) -> bool:
@@ -885,25 +1098,39 @@ class FrontrunShield(gl.contract.Contract):
                 mine = leader_fn()
             except gl.vm.UserError:
                 return False  # cannot reproduce a verdict -> do not endorse one
-            if bool(theirs.get("is_toxic")) != mine["is_toxic"]:
-                return False
             if bool(theirs.get("telemetry_ok")) != mine["telemetry_ok"]:
-                return False
-            try:
-                if abs(int(theirs.get("confidence")) - mine["confidence"]) > CONFIDENCE_TOLERANCE:
-                    return False
-            except Exception:
                 return False
             if str(theirs.get("rationale", "")).strip() == "":
                 return False
-            return True
+            if mine["telemetry_ok"] and not _metrics_agree(theirs.get("derived"), mine["derived"]):
+                return False
+            tc, mc = str(theirs.get("classification")), mine["classification"]
+            if bool(theirs.get("is_toxic")) != (tc == "TOXIC_SANDWICH"):
+                return False
+            if tc == mc:
+                if tc == "INCONCLUSIVE":
+                    return True
+                try:
+                    return abs(int(theirs.get("confidence")) - mine["confidence"]) <= CONFIDENCE_TOLERANCE
+                except Exception:
+                    return False
+            # Labels differ. Only a model-judged INCONCLUSIVE is a safe landing
+            # (refund, no bounty, no slash); a forged-claim finding is
+            # deterministic, so it must match exactly.
+            return tc == "INCONCLUSIVE" and mine["telemetry_ok"] and mc != "FORGED_CLAIM"
 
         decided = gl.vm.run_nondet(leader_fn, validator_fn)
+        d = decided["derived"]
         return {
             "is_toxic": bool(decided["is_toxic"]),
             "confidence": int(decided["confidence"]),
             "classification": str(decided["classification"]),
             "rationale": str(decided["rationale"]),
+            "derived": {
+                "pair": str(d["pair"]), "slippage_bps": int(d["slippage_bps"]),
+                "extracted_cents": int(d["extracted_cents"]), "loss_cents": int(d["loss_cents"]),
+                "priority_gwei": int(d["priority_gwei"]),
+            },
         }
 
     # ------------------------------------------------------------ restitution
@@ -1137,4 +1364,9 @@ class FrontrunShield(gl.contract.Contract):
             "reporter_bounty": str(v.reporter_bounty),
             "reporter_bond_returned": v.reporter_bond_returned,
             "timestamp": int(v.timestamp),
+            "derived_pair": v.derived_pair,
+            "derived_slippage_bps": int(v.derived_slippage_bps),
+            "derived_extracted_cents": int(v.derived_extracted_cents),
+            "derived_loss_cents": int(v.derived_loss_cents),
+            "derived_priority_gwei": int(v.derived_priority_gwei),
         }

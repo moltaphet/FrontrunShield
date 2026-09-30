@@ -1,5 +1,5 @@
 export type SequencerStatus = 'ACTIVE' | 'SLASHED' | 'UNDER_REVIEW' | 'EXITED'
-export type BundleStatus = 'PENDING' | 'TOXIC' | 'BENIGN' | 'INCONCLUSIVE'
+export type BundleStatus = 'PENDING' | 'TOXIC' | 'BENIGN' | 'INCONCLUSIVE' | 'FORGED'
 
 export interface Sequencer {
   address: string

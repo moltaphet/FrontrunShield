@@ -79,6 +79,11 @@ def submit(c, vm, who, builder=BUILDER_A, victim=VICTIM, txs=(TX_V, TX_F, TX_B),
     fund(vm, who)
     vm.sender = who
     vm.value = value
+    # Remember what this reporter claimed so mock_trace can serve receipts that
+    # honestly back it (a forged-claim test passes `truth=` explicitly instead).
+    if not hasattr(vm, "_claims"):
+        vm._claims = {}
+    vm._claims[tuple(txs)] = {"slippage": slippage, "extracted": extracted, "loss": loss, "gwei": gwei}
     try:
         return c.submit_mempool_bundle(
             builder, victim, txs[0], txs[1], txs[2], pair, slippage, extracted, loss, gwei
@@ -103,13 +108,49 @@ def tx_record(tx_hash, sender, position, block=BLOCK, **extra):
 
 _UNSET = object()
 
+POOL = "0x" + "f1" * 20
+USDC = {"address": "0x" + "a0" * 20, "symbol": "USDC", "decimals": "6", "exchange_rate": "1.00"}
+WETH = {"address": "0x" + "a1" * 20, "symbol": "WETH", "decimals": "18", "exchange_rate": "3100.00"}
+DEFAULT_TRUTH = {"slippage": 480, "extracted": 1_84200, "loss": 1_61000, "gwei": 412}
+
+
+def _xfer(frm, to, token, cents):
+    """One Blockscout token-transfer item worth `cents` USD at the token's rate."""
+    dec = int(token["decimals"])
+    if token is USDC:
+        value = cents * 10 ** (dec - 2)
+    else:
+        value = cents * 10 ** dec // 310_000  # WETH at $3100.00
+    return {"from": {"hash": frm}, "to": {"hash": to}, "token": dict(token),
+            "total": {"value": str(value), "decimals": token["decimals"]}}
+
+
+def receipts(truth, victim=VICTIM, bot=BOT):
+    """Token-transfer logs whose *derived* economics equal `truth`
+    (slippage bps, bot profit cents, victim loss cents)."""
+    loss, slip = truth["loss"], truth["slippage"]
+    usd_in = loss * 10_000 // slip if loss > 0 and slip > 0 else 10_000_00
+    usd_out = usd_in - loss
+    park = 50_000_00  # bot working capital, cents
+    return {
+        "victim": [_xfer(victim, POOL, USDC, usd_in), _xfer(POOL, victim, WETH, usd_out)],
+        "frontrun": [_xfer(bot, POOL, USDC, park), _xfer(POOL, bot, WETH, park)],
+        "backrun": [_xfer(bot, POOL, WETH, park), _xfer(POOL, bot, USDC, park + truth["extracted"])],
+    }
+
 
 def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, block=BLOCK,
-               miner=BUILDER_A, block_data=_UNSET, **overrides):
+               miner=BUILDER_A, block_data=_UNSET, truth=None, logs=_UNSET, **overrides):
     """Serve a genuine-looking sandwich for one triple (frontrun -> victim ->
     backrun) plus its block. `overrides` maps role (victim/frontrun/backrun) ->
     dict of field overrides, or None to make that tx a 404. `miner` is the
-    block's builder; `block_data` replaces the whole block payload (None = 404)."""
+    block's builder; `block_data` replaces the whole block payload (None = 404).
+    Token-transfer receipts are generated from `truth` (default: whatever the
+    last submit() for this triple claimed); `logs` maps role -> raw payload
+    (None = 404) to replace them."""
+    if truth is None:
+        truth = getattr(vm, "_claims", {}).get(tuple(txs), DEFAULT_TRUTH)
+    rcpt = receipts(truth, victim=victim_sender, bot=bot)
     roles = (("victim", txs[0], victim_sender, 42), ("frontrun", txs[1], bot, 41), ("backrun", txs[2], bot, 43))
     for role, h, sender, pos in roles:
         ov = overrides.get(role, {})
@@ -117,7 +158,16 @@ def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, block=
             vm.mock_web(rf".*telemetry.*/transactions/{h}$", {"status": 404, "body": "not found"})
             continue
         rec = tx_record(h, sender, pos, block=block)
+        if role == "frontrun":
+            rec.update(gas_price=(truth["gwei"] + 38) * 10**9, base_fee_per_gas=38 * 10**9)
         rec.update(ov)
+        raw = (logs.get(role, _UNSET) if isinstance(logs, dict) else _UNSET)
+        url = rf".*telemetry.*/transactions/{h}/token-transfers$"
+        if raw is None:
+            vm.mock_web(url, {"status": 404, "body": "not found"})
+        else:
+            payload = {"items": rcpt[role], "next_page_params": None} if raw is _UNSET else raw
+            vm.mock_web(url, {"status": 200, "body": json.dumps(payload)})
         vm.mock_web(rf".*telemetry.*/transactions/{h}$", {"status": 200, "body": json.dumps(rec)})
     if block_data is None:
         vm.mock_web(rf".*telemetry.*/blocks/{block}$", {"status": 404, "body": "not found"})
@@ -126,13 +176,14 @@ def mock_trace(vm, txs=(TX_V, TX_F, TX_B), victim_sender=VICTIM, bot=BOT, block=
         vm.mock_web(rf".*telemetry.*/blocks/{block}$", {"status": 200, "body": json.dumps(body)})
 
 
-def mock_feeds(vm, victim=VICTIM, ref=None, miner=BUILDER_A, miners=None):
+def mock_feeds(vm, victim=VICTIM, ref=None, miner=BUILDER_A, miners=None, truth=None):
     """Valid telemetry for the default triple and triple(1..20) (each in its own
     block BLOCK+n so miners can differ: `miners` maps n -> builder), plus the
     reference price feed."""
-    mock_trace(vm, (TX_V, TX_F, TX_B), victim_sender=victim, miner=miner)
+    mock_trace(vm, (TX_V, TX_F, TX_B), victim_sender=victim, miner=miner, truth=truth)
     for n in range(1, 21):
-        mock_trace(vm, triple(n), victim_sender=victim, block=BLOCK + n, miner=(miners or {}).get(n, miner))
+        mock_trace(vm, triple(n), victim_sender=victim, block=BLOCK + n, miner=(miners or {}).get(n, miner),
+                   truth=truth)
     vm.mock_web(r".*coinbase.*", {"status": 200, "body": json.dumps(ref or {"data": {"amount": "3100.00"}})})
 
 

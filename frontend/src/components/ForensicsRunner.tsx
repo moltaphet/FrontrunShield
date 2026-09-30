@@ -63,7 +63,7 @@ function VerdictPanel({ verdict, votes, txHash }: { verdict: Verdict; votes: str
     <div className={`mt-4 animate-fadeUp rounded-xl border p-4 ${toxic ? 'border-toxic-600/70 bg-toxic-600/10' : 'border-shield-600/70 bg-shield-600/10'}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className={`text-base font-extrabold tracking-tight ${toxic ? 'text-toxic-400' : 'text-shield-400'}`}>
-          {toxic ? 'TOXIC SANDWICH · BOND SLASHED' : verdict.classification === 'INCONCLUSIVE' ? 'INCONCLUSIVE · NO SLASH' : 'BENIGN ARBITRAGE · CLEARED'}
+          {toxic ? 'TOXIC SANDWICH · BOND SLASHED' : verdict.classification === 'FORGED_CLAIM' ? 'FORGED CLAIM · REPORTER BOND FORFEITED' : verdict.classification === 'INCONCLUSIVE' ? 'INCONCLUSIVE · NO SLASH' : 'BENIGN ARBITRAGE · CLEARED'}
         </div>
         <span className="badge border-ink-500 bg-ink-800 text-slate-300">{verdict.consensusState}</span>
       </div>

@@ -11,11 +11,11 @@ victim insurance pool, from which the victim can claim restitution.
 | | |
 |---|---|
 | Network | GenLayer Studio Next · chain `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
-| Contract | [`0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A`](https://explorer-studio-next.genlayer.com/address/0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A) |
+| Contract | [`0x05E162753CCE31371773fF57537257c739E7957D`](https://explorer-studio-next.genlayer.com/address/0x05E162753CCE31371773fF57537257c739E7957D) |
 | Source verified | On-chain source (`gen_getContractCode`) is byte-identical to `contracts/frontrun_shield.py` (sha256 in `deployments/studio-next.json`) |
-| Deploy tx | [`0x9ea0b699…ee72`](https://explorer-studio-next.genlayer.com/transactions/0x9ea0b6995ebd0a94549d7f8b15267a98e026b4f5a887036d66f2a7cabea0ee72) (v4; supersedes `0x1459767AD733f1D14997EF89b2962707c63aE5DE`, `0x5C5a1d51639C0F9E0bDeb9952907E1F8F6d3433E`, `0xE247dCb27BBC57b6F05849a104DaB0e8cEfb3eA2`) |
-| **Live slashing tx** | [`0x767406c7…2d60`](https://explorer-studio-next.genlayer.com/transactions/0x767406c7ad487b4d4f7027aa46fbaa008ca45b6d0af03f38619c266b5b602d60) - real mainnet triple, accused builder = the block's real miner, `TOXIC_SANDWICH` (confidence 87), bond 0.4 → 0.2 GEN, reporter bond returned + 0.02 GEN bounty |
-| Live audit-PoC tx | [`0xe67b3f52…67f5`](https://explorer-studio-next.genlayer.com/transactions/0xe67b3f521438b2ae09e4b90fb87c8b699905ff63551b23500463cb4488f567f5) - fabricated hashes, `INCONCLUSIVE` ("Telemetry rejected"), zero slash, reporter bond refunded |
+| Deploy tx | [`0x5b3a19c8…beae`](https://explorer-studio-next.genlayer.com/transactions/0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae) (v5, independent derivation; supersedes `0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A` and earlier instances, listed in `deployments/studio-next.json`) |
+| Live round, real triple | [`0xc99b5b6b…6929`](https://explorer-studio-next.genlayer.com/transactions/0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e) - real mainnet triple: the bot legs have no swap transfers, so derivation fails closed: `INCONCLUSIVE`, bond refunded. (The earlier `TOXIC_SANDWICH` slash on the superseded contract rested on unverified reporter numbers.) |
+| Live audit-PoC tx | [`0xdf9c91e6…a2be`](https://explorer-studio-next.genlayer.com/transactions/0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be) - fabricated hashes, `INCONCLUSIVE` ("Telemetry rejected"), zero slash, reporter bond refunded |
 
 ## Why a smart contract can't do this (theory)
 
@@ -127,7 +127,7 @@ claim; that share is *reserved*. Everything else in the pool (forfeited bonds, s
 victim, lapsed shares) is *surplus* the governor can pay out with `allocate_insurance_surplus`,
 capped at `allocatable_surplus`, so it cannot touch claimable restitution.
 
-**5. Replay recovery.** Only an `INCONCLUSIVE` bundle may be re-filed (fresh bond).
+**5. Replay recovery.** An `INCONCLUSIVE` or `FORGED` bundle may be re-filed (fresh bond, honest numbers).
 
 **6. Unbonding cooldown.** `request_builder_unstake()` starts a 3-day clock (the bond stays
 slashable, reporters can still file). `finalize_builder_unstake()` releases the bond only after the
@@ -153,7 +153,7 @@ frontend/src/data/guestData.ts   rich mock dataset for Guest Mode
 ```bash
 # Python (3.12; pins mirror the working GenLayer toolchain)
 uv venv --python 3.12 && uv pip install --python .venv/bin/python --prerelease=allow -r requirements.txt
-.venv/bin/python -m pytest tests -q                     # 127 passed
+.venv/bin/python -m pytest tests -q                     # 145 passed
 .venv/bin/genvm-lint check contracts/frontrun_shield.py
 
 # Deploy + seed (generates a git-ignored, mode-600 .env with a fresh key; funds it via sim_fundAccount)
@@ -170,6 +170,49 @@ npm run preview -- --port 4173 & npm run check:headless # zero-console-error liv
 Every write attaches the Studio Next fee deposit (~0.1 GEN, from the live fee policy);
 without it the chain reverts `FeesDistributionMissing`. Optional build env:
 `VITE_CONTRACT_ADDRESS`, `VITE_GENLAYER_RPC_URL`, `VITE_GITHUB_URL` (footer link).
+
+## Audit & Steward Updates
+
+Steward feedback: *derive pair, slippage, extracted value, victim loss and priority fee from
+authenticated evidence instead of trusting the reporter, and require validators to agree on the
+exact classification, including BENIGN_ARBITRAGE vs INCONCLUSIVE.* (The contract's label for a
+predatory sandwich is `TOXIC_SANDWICH`.)
+
+**Independent derivation.** Those five fields are now *claims*. Every validator reads each tx and
+its `/token-transfers` from the governor-set Blockscout gateway and computes:
+* **pair / pool**: token symbols and the single counterparty the victim swaps against; the
+  frontrun and backrun must each trade both ways against that same pool;
+* **victim loss / slippage**: USD value sent minus USD value received (token `exchange_rate`s,
+  integer math), and loss / value sent in bps;
+* **extracted value**: the bot's net priced flow across its two legs;
+* **priority fee**: effective tip (`gas_price - base_fee`, capped by `max_priority_fee_per_gas`).
+
+The model prompt contains only these derived figures and the clamp that blocks a toxic label reads
+them too (extraction, victim loss and >= 50 bps slippage must all be present; confidence >= 60).
+
+**Forged claims.** If any claim deviates more than 5% (with a small rounding floor) from its derived
+value, the result is `FORGED_CLAIM`, decided deterministically with no model call: the bond is
+forfeited to the insurance pool, nothing is slashed, the builder is neither slashed nor cleared, and
+the bundle can be re-filed with honest numbers. Logs that are missing, paginated, unpriced or off-pool
+are not proof of forgery and fail closed to `INCONCLUSIVE` (bond refunded).
+
+**Exact-label consensus.** Validators must reproduce the derived metrics (USD within 2% for feed
+drift, pair and pool exactly) and endorse a leader only on an identical label:
+`TOXIC_SANDWICH` and `BENIGN_ARBITRAGE` (the two outcomes that move money) need exact matches, and
+`FORGED_CLAIM` is re-derived exactly. `INCONCLUSIVE` is the fail-closed landing: a BENIGN / INCONCLUSIVE
+split cannot settle BENIGN, so the round resolves INCONCLUSIVE with no bounty, no slash and a
+refunded bond.
+
+Regression tests: `test_forged_economic_claims` (USD 50,000 claimed loss on a USD 100 swap -> bond
+forfeited), `test_validator_classification_disagreement`, plus per-field forgery, missing-receipt,
+pool-mismatch and validator-metric tests.
+
+Redeployed: `0x05E162753CCE31371773fF57537257c739E7957D` (source SHA-256 in
+`deployments/studio-next.json`, on-chain source verified byte for byte). Live rounds on the new
+contract: bundle #1 (real mainnet triple) and #2 (fabricated hashes) both settle `INCONCLUSIVE` with
+the bond refunded, because the real triple's bot legs carry no swap transfers. No live `TOXIC` or
+`FORGED_CLAIM` round was run: no genuine derivable sandwich was found, and those paths are covered
+by the direct-mode tests only.
 
 ## Steward evaluation guide
 
@@ -189,7 +232,7 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 | Check | Result |
 |---|---|
-| `pytest tests` | 127 passed |
+| `pytest tests` | 145 passed |
 | `genvm-lint check` | passed |
 | `npm run lint` / `npm run build` | 0 errors (tsc strict + vite) |
 | `npm run check:headless` | 30/30: zero console errors on live load, all tabs, navbar single-line at 1280/1440/1920 px, wrong-network alert + switch, guest slashing flow, unstake cooldown, report form deposit notice / no telemetry input |
@@ -214,7 +257,7 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
 
 ## Honest limitations
 
-* **Price-impact figures are simulated.** Bundle #1 is a real mainnet triple in a block built by
+* **Legacy note on price-impact figures (superseded by derivation, see Audit & Steward Updates).** Bundle #1 is a real mainnet triple in a block built by
   the accused address, but its slippage / profit / loss numbers are illustrative reporter
   claims: Blockscout's transaction endpoint carries no receipts or pool prices, so the model judges
   structure, fee ordering and those claims plus the Coinbase reference price - it does not measure
@@ -225,8 +268,8 @@ without it the chain reverts `FeesDistributionMissing`. Optional build env:
   demo scale; it needs an indexed / incrementally maintained counter before thousands of bundles.
 * **Refunds make junk reports cheap** (the fee deposit aside): an unverifiable report locks the
   builder's `pending_bundles` until someone calls evaluate. That is the price of fair outage handling.
-* **Reporter-supplied numbers remain reporter-supplied.** A lying report that earns a *benign*
-  verdict on a real attack would block re-filing of that triple.
+* **Derivation depends on the gateway.** Loss is priced with the gateway's token rates and only
+  handles single-pool swaps; aggregator / multi-hop victims fail closed to `INCONCLUSIVE`.
 * **Unbonding is not exercised live**: nobody holds the seeded builders' keys and the cooldown is
   3 days; it is covered by direct-mode tests with a warped clock.
 * Seeded live victim of bundle #1 is a real third-party address, so no restitution claim was made

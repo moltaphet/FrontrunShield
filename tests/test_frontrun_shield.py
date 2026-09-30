@@ -11,7 +11,7 @@ from conftest import (
     CONTRACT, GEN, MIN_BOND, BOND, REPORTER_BOND, BOUNTY_BPS, COOLDOWN, GATEWAY,
     BUILDER_A, BUILDER_B, VICTIM, TX_V, TX_F, TX_B, addr_hex, deploy_configured,
     fund, record_transfers, stake, submit, mock_feeds, mock_trace, mock_verdict, triple,
-    tx_record, BOT, BLOCK, RESTITUTION_WINDOW,
+    tx_record, BOT, BLOCK, RESTITUTION_WINDOW, receipts, DEFAULT_TRUTH,
 )
 
 SLASH = BOND // 2                      # first toxic slash of a 1 GEN bond
@@ -44,7 +44,8 @@ def assert_invariants(c):
     # every slashed wei / forfeited reporter bond is in the pool or was paid out
     assert (int(m["insurance_pool"]) + int(m["restitution_paid"]) + int(m["bounties_paid"])
             + int(m["surplus_allocated"]) == int(m["total_slashed"]) + int(m["bonds_forfeited"]))
-    assert m["bundles_analyzed"] == m["toxic_count"] + m["benign_count"] + m["inconclusive_count"]
+    assert m["bundles_analyzed"] == (m["toxic_count"] + m["benign_count"] + m["inconclusive_count"]
+                                     + m["forged_count"])
     # escrow is exactly the bonds of still-pending bundles
     pending = sum(1 for b in c.get_all_bundles() if b["status"] == "PENDING")
     assert int(m["reporter_escrow"]) == pending * REPORTER_BOND
@@ -206,7 +207,7 @@ def test_toxic_verdict_slashes_half_and_funds_pool(world):
 def test_benign_verdict_clears_builder_without_slash(world):
     c, vm, alice, bob = world
     stake(c, vm, alice)
-    bid = submit(c, vm, bob, slippage=12, extracted=900_00, loss=0)
+    bid = submit(c, vm, bob, slippage=0, extracted=900_00, loss=0)
     mock_feeds(vm)
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=88)
     assert evaluate(c, vm, bob, bid) == "BENIGN_ARBITRAGE"
@@ -520,7 +521,7 @@ def test_full_lifecycle_metrics(world):
     for name, key in (("Flashbots Alpha Relay", BUILDER_A), ("Titan Builder #04", BUILDER_B)):
         stake(c, vm, alice, name=name, builder=key)
     toxic = submit(c, vm, bob, builder=BUILDER_A, txs=triple(1))
-    benign = submit(c, vm, bob, builder=BUILDER_B, txs=triple(2), slippage=8, extracted=300_00, loss=0)
+    benign = submit(c, vm, bob, builder=BUILDER_B, txs=triple(2), slippage=0, extracted=300_00, loss=0)
     pending = submit(c, vm, bob, builder=BUILDER_B, txs=triple(3))
     mock_feeds(vm, miners={2: BUILDER_B, 3: BUILDER_B})
     mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
@@ -608,7 +609,7 @@ def test_submission_cannot_smuggle_a_telemetry_url(world):
 def test_benign_report_forfeits_reporter_bond_to_pool(world):
     c, vm, alice, bob = world
     stake(c, vm, alice)
-    bid = submit(c, vm, bob, slippage=12, extracted=900_00, loss=0)
+    bid = submit(c, vm, bob, slippage=0, extracted=900_00, loss=0)
     mock_feeds(vm)
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
     sent = record_transfers(vm)
@@ -650,7 +651,7 @@ def test_griefing_spam_is_a_net_loss_and_never_drains_the_builder(world):
     mock_feeds(vm)
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
     for n in range(1, 6):
-        evaluate(c, vm, bob, submit(c, vm, bob, txs=triple(n), slippage=8, extracted=100_00, loss=0))
+        evaluate(c, vm, bob, submit(c, vm, bob, txs=triple(n), slippage=0, extracted=100_00, loss=0))
     assert seq(c, BUILDER_A)["staked_amount"] == str(BOND)
     assert c.get_protocol_metrics()["insurance_pool"] == str(5 * REPORTER_BOND)
     assert_invariants(c)
@@ -730,7 +731,12 @@ def test_evaluator_fetches_only_the_derived_endpoints(world):
     stake(c, vm, alice)
     bid = submit(c, vm, bob)
     for role, h, sender, pos in (("v", TX_V, VICTIM, 42), ("f", TX_F, BOT, 41), ("b", TX_B, BOT, 43)):
-        vm.mock_web(re.escape(f"{GATEWAY}/transactions/{h}"), {"status": 200, "body": __import__("json").dumps(tx_record(h, sender, pos))})
+        rec = tx_record(h, sender, pos, **({"gas_price": 450 * 10**9, "base_fee_per_gas": 38 * 10**9} if role == "f" else {}))
+        vm.mock_web(re.escape(f"{GATEWAY}/transactions/{h}") + "$", {"status": 200, "body": __import__("json").dumps(rec)})
+    rc = receipts(DEFAULT_TRUTH)
+    for role, h in (("victim", TX_V), ("frontrun", TX_F), ("backrun", TX_B)):
+        vm.mock_web(re.escape(f"{GATEWAY}/transactions/{h}/token-transfers") + "$",
+                    {"status": 200, "body": __import__("json").dumps({"items": rc[role]})})
     vm.mock_web(re.escape(f"{GATEWAY}/blocks/{BLOCK}"), {"status": 200, "body": __import__("json").dumps({"miner": {"hash": BUILDER_A}})})
     vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
     mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
@@ -1071,7 +1077,7 @@ def test_unnamed_victim_skips_binding_but_not_structure(world):
 def test_only_explicit_benign_forfeits_the_bond(world):
     c, vm, alice, bob = world
     stake(c, vm, alice)
-    b1 = submit(c, vm, bob, txs=triple(1), slippage=8, extracted=100_00, loss=0)
+    b1 = submit(c, vm, bob, txs=triple(1), slippage=0, extracted=100_00, loss=0)
     b2 = submit(c, vm, bob, txs=triple(2))
     mock_feeds(vm)
     sent = record_transfers(vm)
@@ -1111,7 +1117,7 @@ def alloc(c, vm, who, to, amount):
 def test_surplus_is_governor_only_and_bounded(world):
     c, vm, alice, bob = world
     stake(c, vm, alice)
-    bid = submit(c, vm, bob, slippage=8, extracted=100_00, loss=0)
+    bid = submit(c, vm, bob, slippage=0, extracted=100_00, loss=0)
     mock_feeds(vm)
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
     evaluate(c, vm, bob, bid)  # forfeits 0.05 GEN into the pool
@@ -1266,3 +1272,233 @@ def test_prompt_states_the_verified_builder(world):
     mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
     evaluate(c, vm, bob, bid)
     assert f"block builder (miner / fee recipient) {BUILDER_A} matches the accused builder" in seen[0]
+
+
+# ---- steward audit: independent derivation & exact-label consensus ---------------
+def test_forged_economic_claims(world):
+    """A reporter claims a USD 50,000 victim loss on an ordinary USD 100 swap. The
+    receipts show a sub-dollar difference; the claim is FORGED_CLAIM, the model is
+    never consulted, nothing is slashed and the bond is forfeited."""
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, slippage=5_000, extracted=2_000_00, loss=50_000_00)
+    # the receipts show a $100.00 swap (10_000 cents) with a $0.50 shortfall, no bot profit
+    mock_feeds(vm, truth={"slippage": 50, "extracted": 0, "loss": 50, "gwei": 412})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)  # a model that would happily slash
+    sent = record_transfers(vm)
+    assert evaluate(c, vm, bob, bid) == "FORGED_CLAIM"
+    assert len(vm._llm_mocks_hit) == 0, "forged claims must not reach the model"
+
+    s = seq(c, BUILDER_A)
+    assert s["staked_amount"] == str(BOND) and s["total_slashed"] == "0" and s["status"] == "ACTIVE"
+    assert s["reputation_score"] == 80
+    m = c.get_protocol_metrics()
+    assert m["bonds_forfeited"] == str(REPORTER_BOND) and m["insurance_pool"] == str(REPORTER_BOND)
+    assert m["forged_count"] == 1 and m["toxic_count"] == 0 and m["bounties_paid"] == "0"
+    assert sent == []  # no refund
+    assert c.get_bundle(bid)["status"] == "FORGED"
+    v = c.get_all_verdicts()[0]
+    assert v["classification"] == "FORGED_CLAIM" and v["is_toxic"] is False
+    assert v["reporter_bond_returned"] is False
+    assert "victim loss" in v["forensic_rationale"] and "slippage" in v["forensic_rationale"]
+    assert v["derived_loss_cents"] in (50, 51) and v["derived_slippage_bps"] in (50, 51)
+    assert_invariants(c)
+
+
+@pytest.mark.parametrize("field,kwargs", [
+    ("extracted value", {"extracted": 9_999_00}),
+    ("victim loss", {"loss": 3_000_00, "slippage": 480}),
+    ("priority fee", {"gwei": 900}),
+    ("pair", {"pair": "WBTC/DAI (Curve)"}),
+])
+def test_each_forged_field_is_caught(world, field, kwargs):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, **kwargs)
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    assert evaluate(c, vm, bob, bid) == "FORGED_CLAIM"
+    assert field in c.get_all_verdicts()[0]["forensic_rationale"]
+    assert seq(c, BUILDER_A)["staked_amount"] == str(BOND)
+
+
+def test_claims_within_tolerance_are_accepted(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, extracted=1_84200 * 104 // 100, loss=1_61000 * 96 // 100, gwei=412,
+                 slippage=480 * 96 // 100 + 0)
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
+    assert evaluate(c, vm, bob, bid) == "TOXIC_SANDWICH"
+
+
+def test_model_only_sees_derived_figures(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, extracted=1_84200 * 104 // 100)  # 4% off: accepted, but not quoted
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    seen = []
+    orig = vm._match_llm_mock
+    vm._match_llm_mock = lambda prompt: (seen.append(prompt), orig(prompt))[1]
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
+    evaluate(c, vm, bob, bid)
+    assert "bot_extracted_value_usd: 1842.00" in seen[0]
+    assert "victim_loss_usd: 1610.0" in seen[0]  # +1 cent of integer rounding at most
+    assert "frontrun_priority_fee_gwei: 412" in seen[0]
+    assert "pool: " + receipts(DEFAULT_TRUTH)["victim"][0]["to"]["hash"] in seen[0]
+
+
+@pytest.mark.parametrize("role,logs", [
+    ("victim", None),                                   # logs unavailable
+    ("frontrun", {"items": []}),                        # bot legs trade nothing
+    ("backrun", {"items": [], "next_page_params": {"x": 1}}),  # paginated = incomplete
+    ("victim", {"note": "no items"}),
+])
+def test_missing_receipts_fail_closed_to_inconclusive_not_forged(world, role, logs):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, extracted=9_999_00)  # would be forged if it could be checked
+    vm._web_mocks.clear()
+    mock_trace(vm, logs={role: logs})
+    vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    sent = record_transfers(vm)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+    assert transferred(sent) == [REPORTER_BOND]
+    assert c.get_protocol_metrics()["bonds_forfeited"] == "0"
+    assert len(vm._llm_mocks_hit) == 0
+
+
+def test_unpriced_token_fails_closed(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    rc = receipts(DEFAULT_TRUTH)
+    rc["victim"][1]["token"]["exchange_rate"] = None
+    vm._web_mocks.clear()
+    vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
+    mock_trace(vm, logs={"victim": {"items": rc["victim"]}})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+
+
+def test_bot_legs_must_trade_against_the_victims_pool(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    rc = receipts(DEFAULT_TRUTH)
+    other = "0x" + "99" * 20
+    for it in rc["frontrun"]:
+        for k in ("from", "to"):
+            if it[k]["hash"] == rc["victim"][0]["to"]["hash"]:
+                it[k] = {"hash": other}
+    vm.mock_web(r".*coinbase.*", {"status": 200, "body": "{}"})
+    mock_trace(vm, logs={"frontrun": {"items": rc["frontrun"]}})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+    assert "pool" in c.get_all_verdicts()[0]["forensic_rationale"]
+
+
+def test_forged_bundle_can_be_refiled_honestly(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, extracted=9_999_00)
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=95)
+    assert evaluate(c, vm, bob, bid) == "FORGED_CLAIM"
+    bid2 = submit(c, vm, bob)  # honest numbers this time
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    assert evaluate(c, vm, bob, bid2) == "TOXIC_SANDWICH"
+    assert_invariants(c)
+
+
+def test_toxic_label_needs_derived_victim_loss(world):
+    """Even a confident model cannot slash when the receipts show no victim loss."""
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, slippage=480, extracted=1_84200, loss=0)
+    mock_feeds(vm, truth={"slippage": 480, "extracted": 1_84200, "loss": 0, "gwei": 412})
+    mock_trace(vm, truth={"slippage": 480, "extracted": 1_84200, "loss": 0, "gwei": 412})
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=99)
+    assert evaluate(c, vm, bob, bid) in ("INCONCLUSIVE", "FORGED_CLAIM")
+    assert seq(c, BUILDER_A)["staked_amount"] == str(BOND)
+
+
+def test_validator_classification_disagreement(world):
+    """Validators split between BENIGN_ARBITRAGE and INCONCLUSIVE. A BENIGN leader is
+    not endorsed by a validator that reads INCONCLUSIVE (it would forfeit a bond), so
+    the round can only land on INCONCLUSIVE: no bounty, bond refunded, builder
+    untouched, and the bundle may be re-filed."""
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_feeds(vm)
+
+    # Fail-closed settlement: the round lands on INCONCLUSIVE.
+    sent = record_transfers(vm)
+    mock_verdict(vm, "INCONCLUSIVE", toxic=False, conf=30)
+    assert evaluate(c, vm, bob, bid) == "INCONCLUSIVE"
+    assert c.get_bundle(bid)["status"] == "INCONCLUSIVE"
+    v = c.get_all_verdicts()[0]
+    assert v["is_toxic"] is False and v["slashed_amount"] == "0" and v["reporter_bounty"] == "0"
+    assert v["reporter_bond_returned"] is True
+    assert transferred(sent) == [REPORTER_BOND]
+    m = c.get_protocol_metrics()
+    assert m["bonds_forfeited"] == "0" and m["insurance_pool"] == "0" and m["bounties_paid"] == "0"
+    assert seq(c, BUILDER_A)["staked_amount"] == str(BOND) and seq(c, BUILDER_A)["status"] == "ACTIVE"
+    assert_invariants(c)
+
+    # Validator side of the same round. The leader result below is what a BENIGN leader
+    # would have posted; the validator's own model says INCONCLUSIVE -> not endorsed.
+    pool = receipts(DEFAULT_TRUTH)["victim"][0]["to"]["hash"]
+    benign_leader = {"is_toxic": False, "confidence": 90, "classification": "BENIGN_ARBITRAGE",
+                     "rationale": "coincidental ordering", "telemetry_ok": True,
+                     "derived": {"pair": "USDC/WETH", "pool": pool, **_derived_default()}}
+    assert vm.run_validator(leader_result=benign_leader) is False
+    # The reverse split: an INCONCLUSIVE leader is the safe fallback, accepted even by a
+    # validator that leans BENIGN ...
+    mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
+    shrug = {**benign_leader, "classification": "INCONCLUSIVE", "confidence": 30}
+    assert vm.run_validator(leader_result=shrug) is True
+    # ... but a BENIGN leader facing a BENIGN validator still passes (exact label match)
+    assert vm.run_validator(leader_result=benign_leader) is True
+    # ... and TOXIC is never reached without an exactly matching toxic validator.
+    toxic_leader = {**benign_leader, "classification": "TOXIC_SANDWICH", "is_toxic": True}
+    assert vm.run_validator(leader_result=toxic_leader) is False
+
+
+def _derived_default():
+    return {"slippage_bps": 480, "extracted_cents": 1_84200, "loss_cents": 1_61000, "priority_gwei": 412}
+
+
+def test_validators_must_agree_on_derived_metrics(world):
+    """A leader that inflates the extracted value cannot get a validator that derives
+    the real figure to endorse a toxic label."""
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob)
+    mock_feeds(vm)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
+    evaluate(c, vm, bob, bid)
+    pool = receipts(DEFAULT_TRUTH)["victim"][0]["to"]["hash"]
+    honest = {"is_toxic": True, "confidence": 90, "classification": "TOXIC_SANDWICH", "rationale": "x",
+              "telemetry_ok": True, "derived": {"pair": "USDC/WETH", "pool": pool, **_derived_default()}}
+    assert vm.run_validator(leader_result=honest) is True
+    inflated = {**honest, "derived": {**honest["derived"], "extracted_cents": 9_000_00}}
+    assert vm.run_validator(leader_result=inflated) is False
+    wrong_pool = {**honest, "derived": {**honest["derived"], "pool": "0x" + "12" * 20}}
+    assert vm.run_validator(leader_result=wrong_pool) is False
+
+
+def test_validator_rederives_forged_claim_exactly(world):
+    c, vm, alice, bob = world
+    stake(c, vm, alice)
+    bid = submit(c, vm, bob, extracted=9_999_00)
+    mock_feeds(vm, truth=DEFAULT_TRUTH)
+    mock_verdict(vm, "TOXIC_SANDWICH", conf=90)
+    assert evaluate(c, vm, bob, bid) == "FORGED_CLAIM"
+    pool = receipts(DEFAULT_TRUTH)["victim"][0]["to"]["hash"]
+    shrug = {"is_toxic": False, "confidence": 10, "classification": "INCONCLUSIVE", "rationale": "x",
+             "telemetry_ok": True, "derived": {"pair": "USDC/WETH", "pool": pool, **_derived_default()}}
+    assert vm.run_validator(leader_result=shrug) is False  # cannot launder a forgery into a refund
+    assert vm.run_validator() is True
