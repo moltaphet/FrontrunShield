@@ -2,20 +2,35 @@
 
 **Autonomous MEV forensics & sequencer slashing on GenLayer Studio Next (chain 61997).**
 
-Block builders post a GEN bond. Anyone can submit a suspect transaction bundle
-(bot frontrun → victim swap → bot backrun). A committee of GenVM validators reads the
-evidence, decides whether it was a **toxic sandwich** or a **benign arbitrage**, and
-reaches `MAJORITY_AGREE` consensus. A toxic verdict slashes the builder's bond into a
-victim insurance pool, from which the victim can claim restitution.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+## Project overview & motivation
+
+Sandwich attacks bleed retail traders, and the evidence is public, but nobody adjudicates it.
+FrontrunShield resolves predatory MEV with decentralized GenVM consensus and **without trusting
+anything the reporter says about the economics**:
+
+* Block builders post a GEN bond. Anyone can report a suspect bundle
+  (bot frontrun → victim swap → bot backrun) by escrowing a 0.05 GEN reporter bond.
+* Pair, slippage, extracted value, victim loss and priority fee supplied by the reporter are only
+  *claims*. Validators re-derive every one from Blockscout transaction receipts.
+* A committee of GenVM validators must agree on the **exact classification**
+  (`TOXIC_SANDWICH`, `BENIGN_ARBITRAGE`, `INCONCLUSIVE`). A toxic verdict slashes the builder's bond
+  into a victim insurance pool; anything uncertain fails closed.
+
+## Verified Studio Next deployment
 
 | | |
 |---|---|
-| Network | GenLayer Studio Next · chain `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
+| Network | GenLayer Studio Next · chain ID `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
 | Contract | [`0x05E162753CCE31371773fF57537257c739E7957D`](https://explorer-studio-next.genlayer.com/address/0x05E162753CCE31371773fF57537257c739E7957D) |
-| Source verified | On-chain source (`gen_getContractCode`) is byte-identical to `contracts/frontrun_shield.py` (sha256 in `deployments/studio-next.json`) |
-| Deploy tx | [`0x5b3a19c8…beae`](https://explorer-studio-next.genlayer.com/transactions/0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae) (v5, independent derivation; supersedes `0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A` and earlier instances, listed in `deployments/studio-next.json`) |
-| Live round, real triple | [`0xc99b5b6b…6929`](https://explorer-studio-next.genlayer.com/transactions/0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e) - real mainnet triple: the bot legs have no swap transfers, so derivation fails closed: `INCONCLUSIVE`, bond refunded. (The earlier `TOXIC_SANDWICH` slash on the superseded contract rested on unverified reporter numbers.) |
-| Live audit-PoC tx | [`0xdf9c91e6…a2be`](https://explorer-studio-next.genlayer.com/transactions/0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be) - fabricated hashes, `INCONCLUSIVE` ("Telemetry rejected"), zero slash, reporter bond refunded |
+| Source parity | `source_sha256` = `8a718abc51e4581efc6231e81eefe88d80d322bd8b7a36c82e672652cd6fbee8` (recorded in `deployments/studio-next.json`); `gen_getContractCode` on-chain source is byte-identical to `contracts/frontrun_shield.py` (`onchain_source_matches: true`) |
+| Deploy tx | [`0x5b3a19c8…beae`](https://explorer-studio-next.genlayer.com/transactions/0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae) (supersedes `0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A` and earlier instances, listed in `deployments/studio-next.json`) |
+| Live round, real triple | [`0xc99b5b6b…6929`](https://explorer-studio-next.genlayer.com/transactions/0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e): real mainnet triple whose bot legs carry no swap transfers, so derivation fails closed: `INCONCLUSIVE`, bond refunded |
+| Live audit-PoC round | [`0xdf9c91e6…a2be`](https://explorer-studio-next.genlayer.com/transactions/0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be): fabricated hashes, `INCONCLUSIVE`, zero slash, bond refunded |
+
+No live `TOXIC_SANDWICH` or `FORGED_CLAIM` round has been run on this contract (no genuine, derivable
+sandwich was found); those paths are covered by the direct-mode tests.
 
 ## Why a smart contract can't do this (theory)
 
@@ -37,6 +52,26 @@ consensus on **judgement** via the Equivalence Principle instead of byte-identic
 
 ## Architecture
 
+### Data flow
+
+1. **Report.** `submit_mempool_bundle` escrows the reporter bond and stores the claims.
+2. **Authenticate.** Each validator fetches the three txs and the block from the governor-set
+   Blockscout gateway (the reporter cannot name a URL): hash self-match, one block, frontrun <
+   victim < backrun, one bot sender, victim sender bound, accused builder = block miner.
+3. **Derive.** From each tx's token-transfer logs and gas fields: pool, victim loss and slippage
+   (priced at gateway token rates, integer math), bot net profit, frontrun effective priority fee.
+4. **Compare claims.** A claim more than 5% off its derived value is a `FORGED_CLAIM`: no model
+   call, bond forfeited, no slash.
+5. **Judge.** Otherwise the LLM sees only the derived figures plus an independent reference price;
+   a deterministic clamp forbids a toxic label without extraction, victim loss, >= 50 bps slippage
+   and confidence >= 60.
+6. **Consensus.** Validators must reproduce the derived metrics and endorse only an identical label.
+   `INCONCLUSIVE` is the fail-closed landing (refund, no bounty, no slash).
+7. **Settle.** Toxic: slash 50% of the remaining bond, 10% bounty to the reporter, rest to the
+   victim pool. Benign or forged: bond forfeited. Inconclusive: bond refunded.
+
+### Component diagram
+
 ```
   builder / relay                    reporter (anyone)                 victim
         │ stake_builder_bond              │ submit_mempool_bundle           │
@@ -46,10 +81,10 @@ consensus on **judgement** via the Equivalence Principle instead of byte-identic
   │                                                                       ││
   │ evaluate_bundle_forensics(bundle_id)                                  ││
   │   ┌───────────── leader ─────────────┐   ┌──── each validator ─────┐  ││
-  │   │ 1 fetch gateway/<3 tx hashes>  │   │ re-runs steps 1-3       │  ││
-  │   │ 2 fetch Coinbase reference price │   │ agrees iff              │  ││
-  │   │ 3 LLM forensic prompt -> verdict │──▶│   is_toxic  ==  leader  │  ││
-  │   │ 4 deterministic clamp            │   │   |Δconfidence| <= 35   │  ││
+  │   │ 1 fetch txs + token logs         │   │ re-runs steps 1-4       │  ││
+  │   │ 2 derive metrics, check claims   │   │ agrees iff              │  ││
+  │   │ 3 LLM prompt on derived facts    │──▶│  metrics + exact label  │  ││
+  │   │ 4 deterministic clamp            │   │  |Δconfidence| <= 35    │  ││
   │   └──────────────────────────────────┘   └─────────────────────────┘  ││
   │        MAJORITY_AGREE ─▶ toxic? slash 50% of bond ─▶ insurance_pool   ││
   │                          benign? clear builder, +reputation           ││
@@ -136,8 +171,9 @@ cooldown **and** with `pending_bundles == 0`, CEI with rollback. Only the builde
 ## Repository layout
 
 ```
+LICENSE                          MIT
 contracts/frontrun_shield.py     GenVM intelligent contract
-tests/                           127 direct-mode tests (staking, consensus branches, slashing limits,
+tests/                           145 direct-mode tests (staking, consensus branches, slashing limits,
                                  restitution / re-entrancy, validator equivalence, reporter bonding,
                                  strict telemetry verification incl. the audit PoC, victim binding, bond
                                  refund, insurance surplus, replay recovery, builder unbonding)
@@ -171,7 +207,7 @@ Every write attaches the Studio Next fee deposit (~0.1 GEN, from the live fee po
 without it the chain reverts `FeesDistributionMissing`. Optional build env:
 `VITE_CONTRACT_ADDRESS`, `VITE_GENLAYER_RPC_URL`, `VITE_GITHUB_URL` (footer link).
 
-## Audit & Steward Updates
+## Hardened security & audit updates
 
 Steward feedback: *derive pair, slippage, extracted value, victim loss and priority fee from
 authenticated evidence instead of trusting the reporter, and require validators to agree on the
@@ -213,6 +249,22 @@ contract: bundle #1 (real mainnet triple) and #2 (fabricated hashes) both settle
 the bond refunded, because the real triple's bot legs carry no swap transfers. No live `TOXIC` or
 `FORGED_CLAIM` round was run: no genuine derivable sandwich was found, and those paths are covered
 by the direct-mode tests only.
+
+## Test suite
+
+`.venv/bin/python -m pytest tests -q` → **145 passed** (135 in `tests/test_frontrun_shield.py`,
+10 in `tests/test_consensus.py`), plus `genvm-lint check` and `npm run lint` / `npm run build`
+(0 errors). Coverage:
+
+* **Unit / lifecycle:** staking, unbonding, slashing limits, restitution and re-entrancy rollback,
+  insurance surplus, reporter bond accounting, with solvency invariants asserted after each step.
+* **Telemetry & attribution:** strict hash / structure verification, the audit echo-gateway PoC,
+  victim binding, block-miner builder attribution.
+* **Forged-claim regressions:** `test_forged_economic_claims` (USD 50,000 claimed loss on a USD 100
+  swap → bond forfeited), one test per forged field, tolerance acceptance, re-filing after a forgery,
+  missing / paginated / unpriced receipts failing closed, off-pool bot legs, derived-only prompt.
+* **Consensus:** `test_validator_classification_disagreement` (BENIGN vs INCONCLUSIVE split fails
+  closed), validator metric agreement, forged-claim re-derivation, forged leaders, confidence band.
 
 ## Steward evaluation guide
 
@@ -277,3 +329,7 @@ by the direct-mode tests only.
 * Slashing is 50% of the remaining bond; there is no appeals process.
 * Altering the contract requires a redeploy (new address); rerun `deploy.py --force`.
 * Test-network software with valueless tokens - not audited, not for real funds.
+
+## License & attribution
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 moltaphet.
