@@ -23,11 +23,11 @@ anything the reporter says about the economics**:
 | | |
 |---|---|
 | Network | GenLayer Studio Next · chain ID `61997` (`0xF22D`) · RPC `https://studio-next.genlayer.com/api` |
-| Contract | [`0x05E162753CCE31371773fF57537257c739E7957D`](https://explorer-studio-next.genlayer.com/address/0x05E162753CCE31371773fF57537257c739E7957D) |
+| Contract | [`0xe5423eC495dC52893c1372613759200189A14f87`](https://explorer-studio-next.genlayer.com/address/0xe5423eC495dC52893c1372613759200189A14f87) |
 | Source parity | `source_sha256` = `8a718abc51e4581efc6231e81eefe88d80d322bd8b7a36c82e672652cd6fbee8` (recorded in `deployments/studio-next.json`); `gen_getContractCode` on-chain source is byte-identical to `contracts/frontrun_shield.py` (`onchain_source_matches: true`) |
-| Deploy tx | [`0x5b3a19c8…beae`](https://explorer-studio-next.genlayer.com/transactions/0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae) (supersedes `0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A` and earlier instances, listed in `deployments/studio-next.json`) |
-| Live round, real triple | [`0xc99b5b6b…6929`](https://explorer-studio-next.genlayer.com/transactions/0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e): real mainnet triple whose bot legs carry no swap transfers, so derivation fails closed: `INCONCLUSIVE`, bond refunded |
-| Live audit-PoC round | [`0xdf9c91e6…a2be`](https://explorer-studio-next.genlayer.com/transactions/0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be): fabricated hashes, `INCONCLUSIVE`, zero slash, bond refunded |
+| Deploy tx | [`0x2a685a02…1d24`](https://explorer-studio-next.genlayer.com/transactions/0x2a685a021802bf364ae0cbde44f9c47d7c2207d66a286141f18812c593851d24) (supersedes `0x05E162753CCE31371773fF57537257c739E7957D`, `0x644DC7e34B4F3da990e97ab5C684A667d66C9a5A` and earlier instances, listed in `deployments/studio-next.json`) |
+| Live round, real triple | [`0xd61ed4a2…e0a0`](https://explorer-studio-next.genlayer.com/transactions/0xd61ed4a2df17e1d324e73178c91704b045fc3704bcad645c90618d1dd1c7e0a0): real mainnet triple whose bot legs carry no swap transfers, so derivation fails closed: `INCONCLUSIVE`, bond refunded |
+| Live audit-PoC round | [`0x35e063d4…d47f`](https://explorer-studio-next.genlayer.com/transactions/0x35e063d44edae16654827c1350189a01714b939756d010bb836ff2973008d47f): fabricated hashes, `INCONCLUSIVE`, zero slash, bond refunded |
 
 No live `TOXIC_SANDWICH` or `FORGED_CLAIM` round has been run on this contract (no genuine, derivable
 sandwich was found); those paths are covered by the direct-mode tests.
@@ -234,16 +234,16 @@ are not proof of forgery and fail closed to `INCONCLUSIVE` (bond refunded).
 
 **Exact-label consensus.** Validators must reproduce the derived metrics (USD within 2% for feed
 drift, pair and pool exactly) and endorse a leader only on an identical label:
-`TOXIC_SANDWICH` and `BENIGN_ARBITRAGE` (the two outcomes that move money) need exact matches, and
-`FORGED_CLAIM` is re-derived exactly. `INCONCLUSIVE` is the fail-closed landing: a BENIGN / INCONCLUSIVE
-split cannot settle BENIGN, so the round resolves INCONCLUSIVE with no bounty, no slash and a
-refunded bond.
+`TOXIC_SANDWICH`, `BENIGN_ARBITRAGE` and `INCONCLUSIVE` all need exact matches, and
+`FORGED_CLAIM` is re-derived exactly. A validator whose own label differs from the leader's
+(e.g. leader `INCONCLUSIVE` vs validator `BENIGN_ARBITRAGE`) rejects the proposal, so consensus fails
+instead of settling on a mismatched label.
 
 Regression tests: `test_forged_economic_claims` (USD 50,000 claimed loss on a USD 100 swap -> bond
 forfeited), `test_validator_classification_disagreement`, plus per-field forgery, missing-receipt,
 pool-mismatch and validator-metric tests.
 
-Redeployed: `0x05E162753CCE31371773fF57537257c739E7957D` (source SHA-256 in
+Redeployed: `0xe5423eC495dC52893c1372613759200189A14f87` (source SHA-256 in
 `deployments/studio-next.json`, on-chain source verified byte for byte). Live rounds on the new
 contract: bundle #1 (real mainnet triple) and #2 (fabricated hashes) both settle `INCONCLUSIVE` with
 the bond refunded, because the real triple's bot legs carry no swap transfers. No live `TOXIC` or
@@ -263,8 +263,8 @@ by the direct-mode tests only.
 * **Forged-claim regressions:** `test_forged_economic_claims` (USD 50,000 claimed loss on a USD 100
   swap → bond forfeited), one test per forged field, tolerance acceptance, re-filing after a forgery,
   missing / paginated / unpriced receipts failing closed, off-pool bot legs, derived-only prompt.
-* **Consensus:** `test_validator_classification_disagreement` (BENIGN vs INCONCLUSIVE split fails
-  closed), validator metric agreement, forged-claim re-derivation, forged leaders, confidence band.
+* **Consensus:** `test_validator_classification_disagreement` (a BENIGN / INCONCLUSIVE label
+  mismatch is rejected in both directions), validator metric agreement, forged-claim re-derivation, forged leaders, confidence band.
 
 ## Steward evaluation guide
 

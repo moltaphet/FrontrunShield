@@ -39,10 +39,10 @@
 #     The model only ever sees derived figures. Missing / unpriceable logs fail
 #     closed to INCONCLUSIVE (bond refunded), never to a slash.
 #   * Exact-label consensus. Validators also re-derive the metrics and must agree
-#     on them and on the exact classification. TOXIC_SANDWICH and BENIGN_ARBITRAGE
-#     are endorsed only on an exact label match; INCONCLUSIVE is the fail-closed
-#     fallback, so a BENIGN / INCONCLUSIVE split settles INCONCLUSIVE (no bounty,
-#     bond refunded). (TOXIC_SANDWICH is the "predatory sandwich" class.)
+#     on them and on the exact classification. TOXIC_SANDWICH, BENIGN_ARBITRAGE
+#     and INCONCLUSIVE are all endorsed only on an exact label match; a
+#     BENIGN / INCONCLUSIVE split fails consensus (no validator signs off on a
+#     differing label). (TOXIC_SANDWICH is the "predatory sandwich" class.)
 #   * Builder attribution. The block itself is read from `<gateway>/blocks/<n>`
 #     and its miner / fee recipient must equal the accused builder, so a real
 #     sandwich cannot be pinned on an unrelated bonded builder. Fail-closed:
@@ -1105,19 +1105,18 @@ class FrontrunShield(gl.contract.Contract):
             if mine["telemetry_ok"] and not _metrics_agree(theirs.get("derived"), mine["derived"]):
                 return False
             tc, mc = str(theirs.get("classification")), mine["classification"]
+            # Strict exact-label consensus: any divergence between the leader's label
+            # and this validator's own label (INCONCLUSIVE included) is rejected.
+            if tc != mc:
+                return False
             if bool(theirs.get("is_toxic")) != (tc == "TOXIC_SANDWICH"):
                 return False
-            if tc == mc:
-                if tc == "INCONCLUSIVE":
-                    return True
-                try:
-                    return abs(int(theirs.get("confidence")) - mine["confidence"]) <= CONFIDENCE_TOLERANCE
-                except Exception:
-                    return False
-            # Labels differ. Only a model-judged INCONCLUSIVE is a safe landing
-            # (refund, no bounty, no slash); a forged-claim finding is
-            # deterministic, so it must match exactly.
-            return tc == "INCONCLUSIVE" and mine["telemetry_ok"] and mc != "FORGED_CLAIM"
+            if tc == "INCONCLUSIVE":
+                return True
+            try:
+                return abs(int(theirs.get("confidence")) - mine["confidence"]) <= CONFIDENCE_TOLERANCE
+            except Exception:
+                return False
 
         decided = gl.vm.run_nondet(leader_fn, validator_fn)
         d = decided["derived"]

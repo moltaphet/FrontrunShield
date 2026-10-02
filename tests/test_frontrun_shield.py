@@ -1425,9 +1425,9 @@ def test_toxic_label_needs_derived_victim_loss(world):
 
 
 def test_validator_classification_disagreement(world):
-    """Validators split between BENIGN_ARBITRAGE and INCONCLUSIVE. A BENIGN leader is
-    not endorsed by a validator that reads INCONCLUSIVE (it would forfeit a bond), so
-    the round can only land on INCONCLUSIVE: no bounty, bond refunded, builder
+    """Validators split between BENIGN_ARBITRAGE and INCONCLUSIVE. Strict exact-label
+    consensus: a validator refuses a leader whose label differs, in either direction.
+    A round whose validators all read INCONCLUSIVE lands on INCONCLUSIVE: no bounty, bond refunded, builder
     untouched, and the bundle may be re-filed."""
     c, vm, alice, bob = world
     stake(c, vm, alice)
@@ -1455,11 +1455,15 @@ def test_validator_classification_disagreement(world):
                      "rationale": "coincidental ordering", "telemetry_ok": True,
                      "derived": {"pair": "USDC/WETH", "pool": pool, **_derived_default()}}
     assert vm.run_validator(leader_result=benign_leader) is False
-    # The reverse split: an INCONCLUSIVE leader is the safe fallback, accepted even by a
-    # validator that leans BENIGN ...
+    # The reverse split: an INCONCLUSIVE leader is NOT endorsed by a validator whose own
+    # result is BENIGN_ARBITRAGE; exact label equality is required, so consensus fails ...
     mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
     shrug = {**benign_leader, "classification": "INCONCLUSIVE", "confidence": 30}
+    assert vm.run_validator(leader_result=shrug) is False
+    # ... while an INCONCLUSIVE leader facing an INCONCLUSIVE validator is endorsed.
+    mock_verdict(vm, "INCONCLUSIVE", toxic=False, conf=30)
     assert vm.run_validator(leader_result=shrug) is True
+    mock_verdict(vm, "BENIGN_ARBITRAGE", conf=90)
     # ... but a BENIGN leader facing a BENIGN validator still passes (exact label match)
     assert vm.run_validator(leader_result=benign_leader) is True
     # ... and TOXIC is never reached without an exactly matching toxic validator.

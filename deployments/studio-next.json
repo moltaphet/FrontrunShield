@@ -3,47 +3,47 @@
   "chain_id": 61997,
   "rpc_url": "https://studio-next.genlayer.com/api",
   "explorer": "https://explorer-studio-next.genlayer.com",
-  "contract_address": "0x05E162753CCE31371773fF57537257c739E7957D",
-  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0x05E162753CCE31371773fF57537257c739E7957D",
+  "contract_address": "0xe5423eC495dC52893c1372613759200189A14f87",
+  "explorer_url": "https://explorer-studio-next.genlayer.com/address/0xe5423eC495dC52893c1372613759200189A14f87",
   "deployer": "0xBEF843A77C675218228184EF13F22BF7BBC99A53",
-  "deploy_tx": "0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae",
-  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae",
-  "deployed_at": "2026-09-30T16:28:27+00:00",
+  "deploy_tx": "0x2a685a021802bf364ae0cbde44f9c47d7c2207d66a286141f18812c593851d24",
+  "deploy_tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x2a685a021802bf364ae0cbde44f9c47d7c2207d66a286141f18812c593851d24",
+  "deployed_at": "2026-10-02T04:50:22+00:00",
   "source": "contracts/frontrun_shield.py",
-  "source_sha256": "8a718abc51e4581efc6231e81eefe88d80d322bd8b7a36c82e672652cd6fbee8",
+  "source_sha256": "6d52ac012c24f70948966209ae87d34192148b31e355319347885aef80e7550d",
   "runner": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng",
   "fee_deposit_per_write_wei": "100000000000010352",
   "verification": {
     "method": "gen_getContractCode (base64) compared byte-for-byte with the local source",
     "onchain_source_matches": true,
-    "local_source_sha256": "8a718abc51e4581efc6231e81eefe88d80d322bd8b7a36c82e672652cd6fbee8",
-    "checked_at": "2026-09-30T16:28:27+00:00"
+    "local_source_sha256": "6d52ac012c24f70948966209ae87d34192148b31e355319347885aef80e7550d",
+    "checked_at": "2026-10-02T04:50:22+00:00"
   },
   "seed": {
     "builders": {
       "Flashbots Alpha Relay": {
         "address": "0xdeabe6753ca5683ea8fe763d143053f17b5aae09",
         "bond_gen": 0.5,
-        "tx": "0xfd41c79b058a70ebd46197aa06eb478428c49a3ed9ec1a10d297a534bb1c7b37",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xfd41c79b058a70ebd46197aa06eb478428c49a3ed9ec1a10d297a534bb1c7b37"
+        "tx": "0x9b5e0e751ff1d6ca2802d0621d7cfca283f189782dd64454c01bf0f71358bcb5",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x9b5e0e751ff1d6ca2802d0621d7cfca283f189782dd64454c01bf0f71358bcb5"
       },
       "Titan Builder #04": {
         "address": "0x396343362be2a4da1ce0c1c210945346fb82aa49",
         "bond_gen": 0.4,
-        "tx": "0x24fce44700b67f392c444deb0cfed9e929f5a9121500705806e997b95ac83094",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x24fce44700b67f392c444deb0cfed9e929f5a9121500705806e997b95ac83094"
+        "tx": "0x5f1dbe7a7ee85519cd47a898e88bc03d3d4202ded8d0749f681c1a1fbd80822a",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5f1dbe7a7ee85519cd47a898e88bc03d3d4202ded8d0749f681c1a1fbd80822a"
       },
       "BeaverBuild Relay": {
         "address": "0x830603da767a964d29e9977ba4dc063e7a978612",
         "bond_gen": 0.3,
-        "tx": "0x82ad7e21a31f1e6808ff2736a7c37520bb6277e0142514cd18921b53e9a4c8af",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x82ad7e21a31f1e6808ff2736a7c37520bb6277e0142514cd18921b53e9a4c8af"
+        "tx": "0xba7764583cf770f5d1085030f205a15e861086833d3eac6de7fcff55abc40687",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xba7764583cf770f5d1085030f205a15e861086833d3eac6de7fcff55abc40687"
       },
       "Eden Sequencer": {
         "address": "0x4ab924b2a30f20e45a5231c632938502b93f5f7d",
         "bond_gen": 0.25,
-        "tx": "0xb418ce40c1d0b79b941daa3e02ab7d3a1bf337f24f64ab26e3ea2c2b8f988fc2",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xb418ce40c1d0b79b941daa3e02ab7d3a1bf337f24f64ab26e3ea2c2b8f988fc2"
+        "tx": "0xac95f802035399288d36e44ba2d9db0b1d584882f26be903c699b68ac60f03c5",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xac95f802035399288d36e44ba2d9db0b1d584882f26be903c699b68ac60f03c5"
       }
     },
     "bundles": {
@@ -53,8 +53,8 @@
         "victim_tx_hash": "0x44d09b1f74233d59d377444461784e862b593d8da080e5eef8c8adc860e6eb67",
         "frontrun_tx_hash": "0xa7dc6893a00ec5a279297ed3381a2fe0d260410f87e328c27a54b54b857b478f",
         "backrun_tx_hash": "0x93bea253871cd7439c99129d657e8fea1f8782e6e3e704314c6443ad806dbd61",
-        "tx": "0xba943fd056627e58b1927451e7c3d377ba69de206040a438287484b23b203c93",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xba943fd056627e58b1927451e7c3d377ba69de206040a438287484b23b203c93"
+        "tx": "0xdcc6501aa6e5453e23e2478299ab64ff51ee63e9ae0e118cfad2ef111de9220d",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xdcc6501aa6e5453e23e2478299ab64ff51ee63e9ae0e118cfad2ef111de9220d"
       },
       "fabricated-hashes": {
         "bundle_id": 2,
@@ -62,8 +62,8 @@
         "victim_tx_hash": "0x8682b97b8c9966903d8e04cb3f10561d648237990a611d8a14ba949f1bc68d26",
         "frontrun_tx_hash": "0x9bb7f9f37ff0b8aebe626257ce0d02a95197d9aab7ef65f8bd98f60ce5c83903",
         "backrun_tx_hash": "0x9482d1542b3b7cb06e62aa270ac98efb7bb6626a69a9a3ff239a498f773175e5",
-        "tx": "0x5079ed16204bfe5ef6cccbdd3512d8971ef0e4ecd439491258316a71c5c44813",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5079ed16204bfe5ef6cccbdd3512d8971ef0e4ecd439491258316a71c5c44813"
+        "tx": "0x1a697a10a5c35c35da1daa09e4b8a00e78037d5b15ea0cc44017b8624d0e03a6",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x1a697a10a5c35c35da1daa09e4b8a00e78037d5b15ea0cc44017b8624d0e03a6"
       },
       "pending-review": {
         "bundle_id": 3,
@@ -71,37 +71,13 @@
         "victim_tx_hash": "0x2cbbdae064d3b55fc6db999a0086682947160cd12262acd6396a1cedbeb433e6",
         "frontrun_tx_hash": "0x89ccc29c558fb2194a32defe016f789e78cde4fbb7fc16c2963055d922d03f6f",
         "backrun_tx_hash": "0xf3ae56f9ecbd70e98cf0e862013ca202822477ca7c8cf98caaa7d378580985e3",
-        "tx": "0x2eb49fbbe9f736a4858da6e4a676de6261ba3793a41543132cd019fefc3901fa",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x2eb49fbbe9f736a4858da6e4a676de6261ba3793a41543132cd019fefc3901fa"
+        "tx": "0x5a0d04bbc6a26154bea52daa5c76e1f8f9b5994c589e3e32c21ada9dc2114c6c",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x5a0d04bbc6a26154bea52daa5c76e1f8f9b5994c589e3e32c21ada9dc2114c6c"
       }
     },
     "evaluations": {
       "1": {
         "bundle_id": 1,
-        "bundle_status": "INCONCLUSIVE",
-        "classification": "INCONCLUSIVE",
-        "is_toxic": false,
-        "confidence": 0,
-        "consensus_state": "MAJORITY_AGREE",
-        "validator_votes": [
-          "agree",
-          "agree",
-          "agree",
-          "idle",
-          "idle"
-        ],
-        "slashed_amount_wei": "0",
-        "reporter_bounty_wei": "0",
-        "reporter_bond_returned": true,
-        "builder": "Titan Builder #04",
-        "builder_status_after": "ACTIVE",
-        "rationale": "Telemetry rejected: token-transfer logs missing, incomplete or unpriced. The report may be re-filed once verifiable evidence exists.",
-        "tx": "0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xc99b5b6b592cc8ab7d8b4d5cd93a69c0c58109f220f57119504229c6da46929e",
-        "at": "2026-09-30T16:31:10+00:00"
-      },
-      "2": {
-        "bundle_id": 2,
         "bundle_status": "INCONCLUSIVE",
         "classification": "INCONCLUSIVE",
         "is_toxic": false,
@@ -117,23 +93,47 @@
         "slashed_amount_wei": "0",
         "reporter_bounty_wei": "0",
         "reporter_bond_returned": true,
+        "builder": "Titan Builder #04",
+        "builder_status_after": "ACTIVE",
+        "rationale": "Telemetry rejected: token-transfer logs missing, incomplete or unpriced. The report may be re-filed once verifiable evidence exists.",
+        "tx": "0xd61ed4a2df17e1d324e73178c91704b045fc3704bcad645c90618d1dd1c7e0a0",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xd61ed4a2df17e1d324e73178c91704b045fc3704bcad645c90618d1dd1c7e0a0",
+        "at": "2026-10-02T04:53:16+00:00"
+      },
+      "2": {
+        "bundle_id": 2,
+        "bundle_status": "INCONCLUSIVE",
+        "classification": "INCONCLUSIVE",
+        "is_toxic": false,
+        "confidence": 0,
+        "consensus_state": "MAJORITY_AGREE",
+        "validator_votes": [
+          "idle",
+          "idle",
+          "agree",
+          "agree",
+          "agree"
+        ],
+        "slashed_amount_wei": "0",
+        "reporter_bounty_wei": "0",
+        "reporter_bond_returned": true,
         "builder": "BeaverBuild Relay",
         "builder_status_after": "ACTIVE",
         "rationale": "Telemetry rejected: victim tx missing or not a verified transaction record. The report may be re-filed once verifiable evidence exists.",
-        "tx": "0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be",
-        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xdf9c91e6568b6c8dea9f6c9de812adcfa543b62322ece5a53813daa4d908a2be",
-        "at": "2026-09-30T16:31:44+00:00"
+        "tx": "0x35e063d44edae16654827c1350189a01714b939756d010bb836ff2973008d47f",
+        "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x35e063d44edae16654827c1350189a01714b939756d010bb836ff2973008d47f",
+        "at": "2026-10-02T04:53:44+00:00"
       }
     },
     "reference_feed": {
       "url": "https://api.coinbase.com/v2/prices/ETH-USD/spot",
-      "tx": "0x38150810fb7f4cbbee315a8528c38dd697222406cae9d8b103010a685107ae7b",
-      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0x38150810fb7f4cbbee315a8528c38dd697222406cae9d8b103010a685107ae7b"
+      "tx": "0xb5bb9decd5bc144ba164157ab35e6f514fe3b59d2e8b4168460e54e467f337c2",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xb5bb9decd5bc144ba164157ab35e6f514fe3b59d2e8b4168460e54e467f337c2"
     },
     "telemetry_gateway": {
       "url": "https://eth.blockscout.com/api/v2",
-      "tx": "0xc3622657b1f7db58fc4eab8d3079d5a002738bf73a3262cbb72e7b0d32501a6e",
-      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xc3622657b1f7db58fc4eab8d3079d5a002738bf73a3262cbb72e7b0d32501a6e"
+      "tx": "0xc686d1c273ae91f1d985b98046a1de53b9c617fccfc978d68d3d395b1a42d32f",
+      "tx_url": "https://explorer-studio-next.genlayer.com/transactions/0xc686d1c273ae91f1d985b98046a1de53b9c617fccfc978d68d3d395b1a42d32f"
     }
   },
   "superseded": [
@@ -160,6 +160,12 @@
       "deploy_tx": "0x9ea0b6995ebd0a94549d7f8b15267a98e026b4f5a887036d66f2a7cabea0ee72",
       "deployed_at": "2026-09-29T19:47:16+00:00",
       "source_sha256": "533090ba2edf82d75fb13d4186ab6fe3e6771c9535c951339727967d65040fba"
+    },
+    {
+      "contract_address": "0x05E162753CCE31371773fF57537257c739E7957D",
+      "deploy_tx": "0x5b3a19c80f6ab78bc41365c12009feebea60196ca895f1078f252ccf8130beae",
+      "deployed_at": "2026-09-30T16:28:27+00:00",
+      "source_sha256": "8a718abc51e4581efc6231e81eefe88d80d322bd8b7a36c82e672652cd6fbee8"
     }
   ]
 }
